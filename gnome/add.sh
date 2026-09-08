@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 sudo pacman -S --noconfirm btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g dosfstools e2fsprogs cryptsetup
 
@@ -18,6 +18,6 @@ sudo pacman -S --noconfirm docker docker-compose
 
 sudo pacman -S --noconfirm binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
 
-pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
-groupadd vboxusers 2>/dev/null
+sudo pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
+groupadd vboxusers
 modprobe vboxdrv
