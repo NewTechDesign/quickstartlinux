@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 localectl set-locale ru_RU.UTF-8
 
