@@ -1,14 +1,23 @@
 #!/bin/bash
 
-# sudo pacman -S binwalk squashfs-tools jhead mtd-utils uboot-tools ntfs-3g dosfstools exfatprogs btrfs-progs fuse2 udisks2 gvfs 
+sudo pacman -S --noconfirm btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g dosfstools e2fsprogs cryptsetup
 
-# sudo pacman -S meson ninja gcc git pkgconfig glib2 libusb nss openssl pixman systemd-libs gdk-pixbuf2 cairo base-devel scrcpy
+sudo pacman -S --noconfirm gvfs fuse2 fuse3
 
-# sudo pacman -S --noconfirm jdk8-openjdk jre8-openjdk jre8-openjdk-headless xorg-xrandr jdk-openjdk
-# sudo pacman -S --noconfirm android-tools usbutils devtools
+sudo pacman -S --noconfirm openssl nss
 
-# sudo pacman -S podman podman-compose
+sudo pacman -S --noconfirm android-tools scrcpy
 
-# pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
-# groupadd vboxusers 2>/dev/null
-# modprobe vboxdrv
+sudo pacman -S --noconfirm jhead pixman
+
+sudo pacman -S --noconfirm meson ninja gcc git pkgconfig glib2 libusb systemd-libs gdk-pixbuf2 cairo base-devel devtools fakeroot
+
+sudo pacman -S --noconfirm jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
+
+sudo pacman -S --noconfirm docker docker-compose
+
+sudo pacman -S --noconfirm binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
+
+pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
+groupadd vboxusers 2>/dev/null
+modprobe vboxdrv
