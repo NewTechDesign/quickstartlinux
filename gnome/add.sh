@@ -18,6 +18,8 @@ sudo pacman -S --noconfirm docker docker-compose
 
 sudo pacman -S --noconfirm binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
 
+sudo pacman -S --noconfirm mesa mesa-utils vulkan-radeon libva-mesa-driver pciutils
+
 sudo pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
 groupadd vboxusers
 modprobe vboxdrv
