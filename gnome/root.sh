@@ -2,7 +2,7 @@
 
 localectl set-locale ru_RU.UTF-8
 
-setxkbmap -layout us,ru -option grp:alt_shift_toggle
+# setxkbmap -layout us,ru -option grp:alt_shift_toggle (old x11)
 
 sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf
 
