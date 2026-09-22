@@ -10,7 +10,7 @@ sudo pacman -S --noconfirm android-tools scrcpy
 
 sudo pacman -S --noconfirm jhead pixman
 
-sudo pacman -S --noconfirm meson ninja gcc git pkgconfig glib2 libusb systemd-libs gdk-pixbuf2 cairo base-devel devtools fakeroot
+sudo pacman -S --noconfirm git base-devel devtools fakeroot meson ninja pkgconfig glib2 libusb systemd-libs gdk-pixbuf2 cairo gcc
 
 sudo pacman -S --noconfirm jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
 
