@@ -17,6 +17,36 @@ POST_COMMANDS=()
 # Flag: install firmware?
 INSTALL_FIRMWARE=false
 
+# Helper: check if a command exists
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+# Helper: ensure root privileges (auto-escalate via pkexec or sudo)
+ensure_root() {
+    if [[ "$(id -u)" -eq 0 ]]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}Root privileges required. Re-launching...${NC}"
+
+    local script_path
+    script_path="$(readlink -f "$0")"
+
+    # Try pkexec (graphical prompt) first
+    if command_exists pkexec; then
+        exec pkexec "$script_path" "$@"
+    fi
+
+    # Fallback to sudo (terminal prompt)
+    if command_exists sudo; then
+        exec sudo "$script_path" "$@"
+    fi
+
+    echo -e "${RED}Error: neither pkexec nor sudo found. Please run as root.${NC}"
+    exit 1
+}
+
 # Helper: ask a yes/no question
 # Usage: ask_question "Question text?" "default (Y or N)"
 ask_question() {
@@ -46,11 +76,6 @@ ask_question() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
-# Helper: check if a command exists
-command_exists() {
-    command -v "$1" &>/dev/null
-}
-
 # Helper: check if package is installed (pacman)
 is_installed() {
     pacman -Qi "$1" &>/dev/null
@@ -58,6 +83,11 @@ is_installed() {
 
 echo -e "${GREEN}=== Arch Linux Setup Script ===${NC}"
 echo
+
+# ============================================================
+# Ensure root privileges (auto-escalate)
+# ============================================================
+ensure_root "$@"
 
 # ============================================================
 # 0. Use all defaults?
