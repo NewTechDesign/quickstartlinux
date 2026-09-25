@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.activate-linux" path="/org/gnome/shell/extensions/activate-linux/">
+    <key name="main-message" type="s">
+      <default>"Activate Linux"</default>
+      <summary>Main Message</summary>
+      <description>The primary text displayed in the watermark.</description>
+    </key>
+    <key name="secondary-message" type="s">
+      <default>"Go to Settings to activate Linux."</default>
+      <summary>Secondary Message</summary>
+      <description>The secondary text displayed in the watermark.</description>
+    </key>
+    <key name="font-face" type="s">
+      <default>"Sans"</default>
+      <summary>Font Face</summary>
+      <description>The font family to use for the watermark.</description>
+    </key>
+    <key name="font-style" type="s">
+      <default>"Normal"</default>
+      <summary>Font Style</summary>
+      <description>The font style to use (e.g., Normal, Italic).</description>
+    </key>
+    <key name="font-color" type="s">
+      <default>"rgba(255, 255, 255, 0.5)"</default>
+      <summary>Font Color</summary>
+      <description>The color of the watermark text in CSS format.</description>
+    </key>
+    <key name="font-size" type="i">
+      <default>24</default>
+      <summary>Font Size</summary>
+      <description>The font size of the main message in points.</description>
+    </key>
+    <key name="pos-x" type="i">
+      <default>50</default>
+      <summary>X Position</summary>
+      <description>Distance from the right edge of the screen.</description>
+    </key>
+    <key name="pos-y" type="i">
+      <default>50</default>
+      <summary>Y Position</summary>
+      <description>Distance from the bottom edge of the screen.</description>
+    </key>
+    <key name="show-over-windows" type="b">
+      <default>false</default>
+      <summary>Show overlay over all windows</summary>
+      <description>Whether to show the watermark overlaying all windows instead of just the desktop background.</description>
+    </key>
+    <key name="show-on-lockscreen" type="b">
+      <default>false</default>
+      <summary>Show on Lock Screen</summary>
+      <description>Whether to show the watermark when the screen is locked.</description>
+    </key>
+    <key name="toggle-show-over-windows-shortcut" type="as">
+      <default><![CDATA[['<Super><Alt>w']]]></default>
+      <summary>Toggle show over windows shortcut</summary>
+      <description>Keyboard shortcut to toggle whether the watermark overlays all windows.</description>
+    </key>
+    <key name="monitor-preference" type="s">
+      <default>"primary"</default>
+      <summary>Monitor Preference</summary>
+      <description>Which monitor(s) to show the watermark on: primary, all, index.</description>
+    </key>
+    <key name="monitor-index" type="i">
+      <default>0</default>
+      <summary>Monitor Index</summary>
+      <description>Index of the monitor to show the watermark on when preference is set to index.</description>
+    </key>
+    <key name="corner-position" type="s">
+      <default>"bottom-right"</default>
+      <summary>Corner Position</summary>
+      <description>The corner to display the watermark: bottom-right, bottom-left, top-right, top-left.</description>
+    </key>
+    <key name="enable-text-shadow" type="b">
+      <default>false</default>
+      <summary>Enable Text Shadow</summary>
+      <description>Whether to show a text shadow for better readability.</description>
+    </key>
+    <key name="enable-background" type="b">
+      <default>false</default>
+      <summary>Enable Background Plate</summary>
+      <description>Whether to show a background plate behind the text.</description>
+    </key>
+  </schema>
+</schemalist>

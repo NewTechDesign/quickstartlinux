@@ -1,0 +1,122 @@
+<schemalist gettext-domain="gnome-shell-extensions">
+  <schema id="org.gnome.shell.extensions.translate-clipboard"
+    path="/org/gnome/shell/extensions/translate-clipboard/">
+    <key name="from" type="s">
+      <default>'auto'</default>
+      <summary>Source language</summary>
+      <description>
+          Specify the source language
+      </description>
+    </key>
+
+    <key name="to" type="s">
+      <default>'auto'</default>
+      <summary>Target language</summary>
+      <description>
+          Specify the target language
+      </description>
+    </key>
+
+    <key name="to-primary" type="s">
+      <default>'auto'</default>
+      <summary>Primary target language</summary>
+      <description>
+          Specify the primary target language (higher priority)
+      </description>
+    </key>
+
+    <key name="to-secondary" type="s">
+      <default>''</default>
+      <summary>Secondary target language</summary>
+      <description>
+          Specify the secondary target language (lower priority)
+      </description>
+    </key>
+
+    <key name="enable-trans" type="b">
+      <default>false</default>
+      <summary>Enable/Disable translation</summary>
+      <description>
+        Enable or disable translation.
+      </description>
+    </key>
+
+    <key name="enable-selection" type="b">
+      <default>true</default>
+      <summary>Use selection</summary>
+      <description>
+        Use current selection instead of clipboard)
+      </description>
+    </key>
+
+    <key name="brief-mode" type="b">
+      <default>false</default>
+      <summary>Brief mode</summary>
+      <description>
+        Brief mode
+      </description>
+    </key>
+    <key name="auto-close" type="b">
+      <default>false</default>
+      <summary>Auto close</summary>
+      <description>
+        Auto close
+      </description>
+    </key>
+    <key name="auto-hide-mode" type="s">
+      <default>'timeout'</default>
+      <summary>Auto hide mode</summary>
+      <description>
+        Auto hide mode: 'click' for click outside to hide, 'timeout' for timeout hide, 'both' for both
+      </description>
+    </key>
+
+    <key name="translate-selected-text" type="as">
+      <default><![CDATA[['<Super>Y']]]></default>
+      <summary>Translate selected text even the translation is disabled.</summary>
+      <description>
+        Shortcut keys for translating selected text
+      </description>
+    </key>
+
+    <key name="voice" type="s">
+      <default>'Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoXiaoNeural)'</default>
+      <summary>TTS engine</summary>
+      <description>
+          TTS engine.
+      </description>
+    </key>
+
+    <key name="proxy" type="s">
+      <default>''</default>
+      <summary>Proxy</summary>
+      <description>
+        Proxy used for curl. [protocol://]host[:port].
+        For socks5: socks5h://127.0.0.1:9999.
+      </description>
+    </key>
+
+    <key name="engine" type="s">
+      <default>'Google'</default>
+      <summary>Translate engine</summary>
+      <description>
+        Use google or LLM.
+      </description>
+    </key>
+    <!-- LLM: provider, model, apikey, prompt -->
+    <key name="llm-provider" type="s">
+      <default>'OpenRouter'</default>
+      <summary>LLM Provider</summary>
+      <description>
+        LLM service provider (e.g. OpenAI, openrouter, etc.)
+      </description>
+    </key>
+    <key name="provider-settings" type="a{sv}">
+      <default>{}</default>
+      <summary>Provider Settings</summary>
+      <description>
+        LLM service provider (e.g. OpenAI, openrouter, etc.)
+      </description>
+    </key>
+  </schema>
+</schemalist>
