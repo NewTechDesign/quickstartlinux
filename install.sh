@@ -144,7 +144,7 @@ if ask_question "Are you using GNOME?" "Y"; then
     fi
 
     if [[ -n "$ACTIVE_UID" ]]; then
-        POST_COMMANDS+=("export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus && su -s /bin/sh -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && gsettings set org.gnome.shell disable-extension-version-validation true\" \$(id -un ${ACTIVE_UID})")
+        POST_COMMANDS+=("export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus && su ${ACTIVE_UID} -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && gsettings set org.gnome.shell disable-extension-version-validation true\"")
     else
         echo -e "${RED}Warning: Could not determine active user. Skipping gsettings.${NC}"
     fi
@@ -217,7 +217,7 @@ if ask_question "Install all development and utility tools?" "Y"; then
     )
 
     # Enable docker
-    POST_COMMANDS+=("systemctl enable --now docker")
+    # POST_COMMANDS+=("systemctl enable --now docker")
 fi
 
 # ============================================================
