@@ -14,12 +14,26 @@ PACMAN_PACKAGES=()
 FLATPAK_PACKAGES=()
 POST_COMMANDS=()
 
+# Flag: install firmware?
+INSTALL_FIRMWARE=false
+
 # Helper: ask a yes/no question
 # Usage: ask_question "Question text?" "default (Y or N)"
 ask_question() {
     local prompt="$1"
     local default="$2"
     local answer
+
+    # If default mode is active, return the default answer
+    if [[ "$USE_DEFAULTS" == "true" ]]; then
+        if [[ "$default" == "Y" ]]; then
+            echo -e "${YELLOW}${prompt} [Y/n]: ${GREEN}Y (default)${NC}"
+            return 0
+        else
+            echo -e "${YELLOW}${prompt} [y/N]: ${GREEN}N (default)${NC}"
+            return 1
+        fi
+    fi
 
     if [[ "$default" == "Y" ]]; then
         read -rp "$(echo -e "${YELLOW}${prompt} [Y/n]: ${NC}")" answer
@@ -43,6 +57,16 @@ is_installed() {
 }
 
 echo -e "${GREEN}=== Arch Linux Setup Script ===${NC}"
+echo
+
+# ============================================================
+# 0. Use all defaults?
+# ============================================================
+USE_DEFAULTS=false
+if ask_question "Use all default settings?" "Y"; then
+    USE_DEFAULTS=true
+    echo -e "${GREEN}Using default settings.${NC}"
+fi
 echo
 
 # ============================================================
@@ -189,8 +213,45 @@ fi
 
 # ============================================================
 # 9. Install firmware (auto-detect CPU & GPU)?
+#    Only ask the question here; detection happens later.
 # ============================================================
 if ask_question "Install firmware for your CPU/GPU?" "Y"; then
+    INSTALL_FIRMWARE=true
+fi
+
+# ============================================================
+# 10. Install a virtual machine?
+# ============================================================
+if ask_question "Do you want to install a virtual machine?" "N"; then
+    echo -e "${YELLOW}Choose VM type:${NC}"
+    echo "  1) VirtualBox"
+    echo "  2) GNOME Boxes"
+    read -rp "Enter choice [1/2]: " VM_CHOICE
+
+    case "$VM_CHOICE" in
+        1)
+            echo -e "${GREEN}Selected VirtualBox.${NC}"
+            PACMAN_PACKAGES+=(virtualbox virtualbox-host-modules-arch)
+            POST_COMMANDS+=("groupadd -f vboxusers")
+            POST_COMMANDS+=("modprobe vboxdrv")
+            ;;
+        2)
+            echo -e "${GREEN}Selected GNOME Boxes.${NC}"
+            PACMAN_PACKAGES+=(gnome-boxes)
+            ;;
+        *)
+            echo -e "${RED}Invalid choice. Skipping VM installation.${NC}"
+            ;;
+    esac
+fi
+
+# ============================================================
+# 11. DETECT CPU & GPU (after all questions)
+# ============================================================
+if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
+    echo
+    echo -e "${GREEN}>>> Detecting CPU and GPU...${NC}"
+
     # Base audio/video/bluetooth firmware
     PACMAN_PACKAGES+=(
         pipewire pipewire-alsa pipewire-pulse wireplumber alsa-utils
@@ -233,32 +294,6 @@ if ask_question "Install firmware for your CPU/GPU?" "Y"; then
             mesa mesa-utils vulkan-radeon libva-mesa-driver
         )
     fi
-fi
-
-# ============================================================
-# 10. Install a virtual machine?
-# ============================================================
-if ask_question "Do you want to install a virtual machine?" "N"; then
-    echo -e "${YELLOW}Choose VM type:${NC}"
-    echo "  1) VirtualBox"
-    echo "  2) GNOME Boxes"
-    read -rp "Enter choice [1/2]: " VM_CHOICE
-
-    case "$VM_CHOICE" in
-        1)
-            echo -e "${GREEN}Selected GNOME Boxes.${NC}"
-            PACMAN_PACKAGES+=(gnome-boxes)
-            ;;
-        2)
-            echo -e "${GREEN}Selected VirtualBox.${NC}"
-            PACMAN_PACKAGES+=(virtualbox virtualbox-host-modules-arch)
-            POST_COMMANDS+=("groupadd -f vboxusers")
-            POST_COMMANDS+=("modprobe vboxdrv")
-            ;;
-        *)
-            echo -e "${RED}Invalid choice. Skipping VM installation.${NC}"
-            ;;
-    esac
 fi
 
 # ============================================================
