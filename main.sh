@@ -35,12 +35,12 @@ ensure_root() {
 
     # Try pkexec (graphical prompt) first
     if command_exists pkexec; then
-        exec pkexec "$script_path" "$@"
+        exec pkexec sh "$script_path" "$@"
     fi
 
     # Fallback to sudo (terminal prompt)
     if command_exists sudo; then
-        exec sudo "$script_path" "$@"
+        exec sudo sh "$script_path" "$@"
     fi
 
     echo -e "${RED}Error: neither pkexec nor sudo found. Please run as root.${NC}"
