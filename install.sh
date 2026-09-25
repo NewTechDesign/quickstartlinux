@@ -81,6 +81,49 @@ is_installed() {
     pacman -Qi "$1" &>/dev/null
 }
 
+# Helper: detect the active graphical user (name, UID, home)
+# Sets: ACTIVE_USER, ACTIVE_UID, ACTIVE_HOME
+detect_active_user() {
+    ACTIVE_USER=""
+    ACTIVE_UID=""
+    ACTIVE_HOME=""
+
+    # Try loginctl first
+    if command_exists loginctl; then
+        local session_id
+        session_id=$(loginctl list-sessions --no-legend 2>/dev/null \
+            | awk '$3 == "seat0" || $4 == "seat0" {print $1; exit}')
+
+        if [[ -z "$session_id" ]]; then
+            session_id=$(loginctl list-sessions --no-legend 2>/dev/null \
+                | awk '{print $1}' | head -n1)
+        fi
+
+        if [[ -n "$session_id" ]]; then
+            ACTIVE_UID=$(loginctl show-session "$session_id" -p UID --value 2>/dev/null || echo "")
+            if [[ -n "$ACTIVE_UID" ]]; then
+                ACTIVE_USER=$(id -nu "$ACTIVE_UID" 2>/dev/null || echo "")
+            fi
+        fi
+    fi
+
+    # Fallback: who
+    if [[ -z "$ACTIVE_USER" ]]; then
+        ACTIVE_USER=$(who | awk '{print $1}' | head -n1)
+        if [[ -n "$ACTIVE_USER" ]]; then
+            ACTIVE_UID=$(id -u "$ACTIVE_USER" 2>/dev/null || echo "")
+        fi
+    fi
+
+    # Resolve home directory
+    if [[ -n "$ACTIVE_USER" ]]; then
+        ACTIVE_HOME=$(getent passwd "$ACTIVE_USER" | cut -d: -f6)
+        if [[ -z "$ACTIVE_HOME" ]]; then
+            ACTIVE_HOME="/home/${ACTIVE_USER}"
+        fi
+    fi
+}
+
 echo -e "${GREEN}=== Arch Linux Setup Script ===${NC}"
 echo
 
@@ -117,36 +160,50 @@ if ask_question "Are you using GNOME?" "Y"; then
     USE_GNOME=true
     PACMAN_PACKAGES+=(adw-gtk-theme gnome-tweaks gnome-sound-recorder)
 
-    # Determine the active user's UID in the graphical session
-    ACTIVE_UID=""
-
-    # Try loginctl first
-    if command_exists loginctl; then
-        SESSION_ID=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$3 == "seat0" || $4 == "seat0" {print $1; exit}')
-        if [[ -n "$SESSION_ID" ]]; then
-            ACTIVE_UID=$(loginctl show-session "$SESSION_ID" -p UID --value 2>/dev/null || echo "")
-        fi
-        # Fallback: first session
-        if [[ -z "$ACTIVE_UID" ]]; then
-            SESSION_ID=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -n1)
-            if [[ -n "$SESSION_ID" ]]; then
-                ACTIVE_UID=$(loginctl show-session "$SESSION_ID" -p UID --value 2>/dev/null || echo "")
-            fi
-        fi
-    fi
-
-    # Fallback: who is logged in -> convert name to UID
-    if [[ -z "$ACTIVE_UID" ]]; then
-        ACTIVE_USER_TMP=$(who | awk '{print $1}' | head -n1)
-        if [[ -n "$ACTIVE_USER_TMP" ]]; then
-            ACTIVE_UID=$(id -u "$ACTIVE_USER_TMP" 2>/dev/null || echo "")
-        fi
-    fi
+    # Detect the active user once and reuse it
+    detect_active_user
 
     if [[ -n "$ACTIVE_UID" ]]; then
         POST_COMMANDS+=("export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus && su ${ACTIVE_UID} -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && gsettings set org.gnome.shell disable-extension-version-validation true\"")
     else
         echo -e "${RED}Warning: Could not determine active user. Skipping gsettings.${NC}"
+    fi
+fi
+
+# ============================================================
+# 2b. Restore GNOME settings?
+# ============================================================
+if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
+    if ask_question "Restore GNOME settings from quickstartlinux?" "Y"; then
+
+        # Reuse the detected user, or detect if not set yet
+        if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
+            detect_active_user
+        fi
+
+        if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" || -z "$ACTIVE_HOME" ]]; then
+            echo -e "${RED}Warning: Could not determine active user. Skipping GNOME restore.${NC}"
+        else
+            echo -e "${GREEN}Restoring GNOME settings for user: ${ACTIVE_USER} (UID ${ACTIVE_UID})${NC}"
+
+            # 1. Clone repo
+            POST_COMMANDS+=("rm -rf /tmp/quickstartlinux && git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux")
+
+            # 2. Apply dconf settings as the active user (with DBus session)
+            POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < /tmp/quickstartlinux/gnome/restore/dconf-settings.ini'")
+
+            # 3. Copy gtk-3.0 into user's ~/.config
+            POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a /tmp/quickstartlinux/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
+
+            # 3b. Replace USER placeholder in gtk-3.0/bookmarks with the actual username
+            POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
+
+            # 4. Copy .local into user's home
+            POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
+
+            # 5. Cleanup
+            POST_COMMANDS+=("rm -rf /tmp/quickstartlinux")
+        fi
     fi
 fi
 
