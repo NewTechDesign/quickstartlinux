@@ -205,7 +205,7 @@ if ask_question "Install firmware for your CPU/GPU?" "Y"; then
         echo -e "${GREEN}Intel CPU detected. Adding Intel packages...${NC}"
         PACMAN_PACKAGES+=(
             mesa mesa-utils libva-intel-driver intel-media-driver
-            vulkan-intel lib32-vulkan-intel lib32-mesa
+            vulkan-intel
         )
     fi
 
@@ -213,8 +213,7 @@ if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     if [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
         echo -e "${GREEN}AMD CPU detected. Adding AMD packages...${NC}"
         PACMAN_PACKAGES+=(
-            mesa mesa-utils vulkan-radeon lib32-vulkan-radeon
-            libva-mesa-driver lib32-mesa
+            mesa mesa-utils vulkan-radeon libva-mesa-driver
         )
     fi
 
@@ -222,9 +221,8 @@ if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     if echo "$GPU_INFO" | grep -qi nvidia; then
         echo -e "${GREEN}NVIDIA GPU detected. Adding NVIDIA packages...${NC}"
         PACMAN_PACKAGES+=(
-            nvidia nvidia-utils nvidia-settings lib32-nvidia-utils
-            vulkan-icd-loader lib32-vulkan-icd-loader libvdpau
-            lib32-libvdpau opencl-nvidia lib32-opencl-nvidia
+            nvidia nvidia-utils nvidia-settings
+            vulkan-icd-loader libvdpau opencl-nvidia
         )
     fi
 
@@ -232,8 +230,7 @@ if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     if echo "$GPU_INFO" | grep -qiE 'amd|ati|radeon'; then
         echo -e "${GREEN}AMD GPU detected. Adding AMD GPU packages...${NC}"
         PACMAN_PACKAGES+=(
-            mesa mesa-utils vulkan-radeon lib32-vulkan-radeon
-            libva-mesa-driver lib32-mesa
+            mesa mesa-utils vulkan-radeon libva-mesa-driver
         )
     fi
 fi
@@ -249,14 +246,14 @@ if ask_question "Do you want to install a virtual machine?" "N"; then
 
     case "$VM_CHOICE" in
         1)
+            echo -e "${GREEN}Selected GNOME Boxes.${NC}"
+            PACMAN_PACKAGES+=(gnome-boxes)
+            ;;
+        2)
             echo -e "${GREEN}Selected VirtualBox.${NC}"
             PACMAN_PACKAGES+=(virtualbox virtualbox-host-modules-arch)
             POST_COMMANDS+=("groupadd -f vboxusers")
             POST_COMMANDS+=("modprobe vboxdrv")
-            ;;
-        2)
-            echo -e "${GREEN}Selected GNOME Boxes.${NC}"
-            PACMAN_PACKAGES+=(gnome-boxes)
             ;;
         *)
             echo -e "${RED}Invalid choice. Skipping VM installation.${NC}"
