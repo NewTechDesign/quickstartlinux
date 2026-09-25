@@ -117,32 +117,34 @@ if ask_question "Are you using GNOME?" "Y"; then
     USE_GNOME=true
     PACMAN_PACKAGES+=(adw-gtk-theme gnome-tweaks gnome-sound-recorder)
 
-    # Determine the active user in the graphical session
-    ACTIVE_USER=""
+    # Determine the active user's UID in the graphical session
     ACTIVE_UID=""
 
     # Try loginctl first
     if command_exists loginctl; then
-        ACTIVE_USER=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$3 == "seat0" || $4 == "seat0" {print $3; exit}')
-        # Fallback: get the user of the active session
-        if [[ -z "$ACTIVE_USER" ]]; then
-            ACTIVE_USER=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | head -n1)
+        SESSION_ID=$(loginctl list-sessions --no-legend 2>/dev/null | awk '$3 == "seat0" || $4 == "seat0" {print $1; exit}')
+        if [[ -n "$SESSION_ID" ]]; then
+            ACTIVE_UID=$(loginctl show-session "$SESSION_ID" -p UID --value 2>/dev/null || echo "")
+        fi
+        # Fallback: first session
+        if [[ -z "$ACTIVE_UID" ]]; then
+            SESSION_ID=$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}' | head -n1)
+            if [[ -n "$SESSION_ID" ]]; then
+                ACTIVE_UID=$(loginctl show-session "$SESSION_ID" -p UID --value 2>/dev/null || echo "")
+            fi
         fi
     fi
 
-    # Fallback: who is logged in
-    if [[ -z "$ACTIVE_USER" ]]; then
-        ACTIVE_USER=$(who | awk '{print $1}' | head -n1)
+    # Fallback: who is logged in -> convert name to UID
+    if [[ -z "$ACTIVE_UID" ]]; then
+        ACTIVE_USER_TMP=$(who | awk '{print $1}' | head -n1)
+        if [[ -n "$ACTIVE_USER_TMP" ]]; then
+            ACTIVE_UID=$(id -u "$ACTIVE_USER_TMP" 2>/dev/null || echo "")
+        fi
     fi
 
-    if [[ -n "$ACTIVE_USER" ]]; then
-        ACTIVE_UID=$(id -u "$ACTIVE_USER" 2>/dev/null || echo "")
-
-        if [[ -n "$ACTIVE_UID" ]]; then
-            POST_COMMANDS+=("export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus && su - ${ACTIVE_USER} -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && gsettings set org.gnome.shell disable-extension-version-validation true\"")
-        else
-            echo -e "${RED}Warning: Could not determine UID for user '${ACTIVE_USER}'. Skipping gsettings.${NC}"
-        fi
+    if [[ -n "$ACTIVE_UID" ]]; then
+        POST_COMMANDS+=("export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus && su -s /bin/sh -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && gsettings set org.gnome.shell disable-extension-version-validation true\" \$(id -un ${ACTIVE_UID})")
     else
         echo -e "${RED}Warning: Could not determine active user. Skipping gsettings.${NC}"
     fi
