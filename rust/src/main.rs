@@ -1,8 +1,3 @@
-// ============================================================
-// Arch Linux Setup Wizard — single-file Rust TUI
-// Linux only. English only.
-// ============================================================
-
 use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
@@ -24,9 +19,101 @@ use ratatui::{
     Terminal,
 };
 
-// ============================================================
-// Theme (from the zapret-rust example)
-// ============================================================
+const PACMAN_GNOME: &[&str] = &["gdm", "gnome"];
+
+const PACMAN_GNOME_THEME: &[&str] = &[
+    "adw-gtk-theme",
+    "gnome-tweaks",
+    "gnome-sound-recorder",
+];
+
+const PACMAN_FONTS: &[&str] = &[
+    "ttf-dejavu",
+    "ttf-liberation",
+    "ttf-arphic-ukai",
+    "ttf-arphic-uming",
+    "ttf-sazanami",
+    "noto-fonts",
+    "noto-fonts-emoji",
+    "noto-fonts-cjk",
+];
+
+const PACMAN_DEVTOOLS: &[&str] = &[
+    "pacman-contrib",
+    "btrfs-progs", "xfsprogs", "f2fs-tools", "exfatprogs", "udftools",
+    "ntfs-3g", "ntfsprogs", "dosfstools", "e2fsprogs", "cryptsetup",
+    "binwalk", "squashfs-tools", "mtd-utils", "uboot-tools",
+    "udisks2", "usbutils",
+    "gvfs", "fuse2", "fuse3",
+    "openssl", "nss",
+    "android-tools", "scrcpy",
+    "jhead", "pixman",
+    "jdk8-openjdk", "jre8-openjdk", "jre8-openjdk-headless",
+    "jdk-openjdk", "xorg-xrandr",
+    "git", "base-devel", "devtools", "fakeroot", "meson", "ninja",
+    "pkgconfig", "glib2", "libusb", "systemd-libs",
+    "gdk-pixbuf2", "cairo", "gcc",
+    "docker", "docker-compose",
+];
+
+const PACMAN_FLATPAK: &[&str] = &["flatpak"];
+
+const PACMAN_FIRMWARE_BASE: &[&str] = &[
+    "pipewire", "pipewire-alsa", "pipewire-pulse", "wireplumber",
+    "alsa-utils", "sof-firmware", "alsa-ucm-conf",
+    "v4l-utils", "bluez", "bluez-utils", "pciutils",
+];
+
+const PACMAN_FIRMWARE_INTEL: &[&str] = &[
+    "mesa", "mesa-utils", "libva-intel-driver", "intel-media-driver",
+    "vulkan-intel",
+];
+
+const PACMAN_FIRMWARE_AMD_CPU: &[&str] = &[
+    "mesa", "mesa-utils", "vulkan-radeon", "libva-mesa-driver",
+];
+
+const PACMAN_FIRMWARE_NVIDIA: &[&str] = &[
+    "nvidia", "nvidia-utils", "nvidia-settings",
+    "vulkan-icd-loader", "libvdpau",
+    "opencl-nvidia",
+];
+
+const PACMAN_FIRMWARE_AMD_GPU: &[&str] = &[
+    "mesa", "mesa-utils", "vulkan-radeon", "libva-mesa-driver",
+];
+
+const PACMAN_VM: &[&str] = &[
+    "virtualbox", "virtualbox-host-modules-arch", "gnome-boxes",
+];
+
+const FLATPAK_APPS: &[&str] = &[
+    "com.mattjakeman.ExtensionManager",
+    "org.polymc.PolyMC",
+    "org.chromium.Chromium",
+    "us.zoom.Zoom",
+];
+
+const CMD_ENABLE_GDM: &str = "systemctl enable --now gdm";
+const CMD_ENABLE_BLUETOOTH: &str = "systemctl enable --now bluetooth";
+const CMD_ENABLE_DOCKER: &str = "systemctl enable --now docker";
+const CMD_SET_LOCALE: &str = "localectl set-locale ru_RU.UTF-8";
+const CMD_BOOT_TIMEOUT: &str = "sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf";
+const CMD_FLATPAK_REMOTE: &str =
+    "flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo";
+const CMD_VBOX_GROUP: &str = "groupadd -f vboxusers";
+const CMD_VBOX_MODPROBE: &str = "modprobe vboxdrv";
+
+fn gnome_gsettings_cmd(user: &str, uid: u32) -> String {
+    format!(
+        "export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus && \
+         su - {user} -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && \
+         gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && \
+         gsettings set org.gnome.shell disable-extension-version-validation true\"",
+        uid = uid,
+        user = user
+    )
+}
 
 struct Theme;
 
@@ -74,10 +161,6 @@ impl Theme {
     }
 }
 
-// ============================================================
-// Auto privilege escalation (Linux-only)
-// ============================================================
-
 fn is_root() -> bool {
     Command::new("id")
         .arg("-u")
@@ -98,19 +181,13 @@ fn ensure_root() {
     let exe = std::env::current_exe().unwrap_or_default();
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    // Try pkexec first (exec replaces the current process)
     let _err1 = Command::new("pkexec").arg(&exe).args(&args).exec();
 
-    // Fallback to sudo
     let err2 = Command::new("sudo").arg(&exe).args(&args).exec();
 
     eprintln!("Failed to escalate privileges: {}", err2);
     std::process::exit(1);
 }
-
-// ============================================================
-// Plan
-// ============================================================
 
 #[derive(Default)]
 struct Plan {
@@ -145,10 +222,6 @@ impl Plan {
         self.post.retain(|p| s.insert(p.clone()));
     }
 }
-
-// ============================================================
-// Detection helpers
-// ============================================================
 
 fn capture(cmd: &str) -> String {
     Command::new("sh")
@@ -222,19 +295,10 @@ fn detect_gpu_info() -> String {
     capture("lspci 2>/dev/null | grep -Ei 'vga|3d|display'")
 }
 
-// ============================================================
-// Wizard state
-// ============================================================
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
-    /// The Y/N checklist
     Checklist,
-    /// Pre-flight summary
-    Summary,
-    /// Running install
     Running,
-    /// Done
     Done,
 }
 
@@ -251,10 +315,6 @@ impl Choice {
             Choice::No => Choice::Yes,
         }
     }
-
-    fn as_bool(self) -> bool {
-        matches!(self, Choice::Yes)
-    }
 }
 
 struct OptionItem {
@@ -262,7 +322,6 @@ struct OptionItem {
     label: &'static str,
     help: &'static str,
     choice: Choice,
-    enabled: bool,
 }
 
 impl OptionItem {
@@ -272,12 +331,10 @@ impl OptionItem {
             label,
             help,
             choice: if default_yes { Choice::Yes } else { Choice::No },
-            enabled: false,
         }
     }
 }
 
-/// The checklist cursor can be on any option OR on the Install/Exit buttons.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CursorPos {
     Option(usize),
@@ -291,7 +348,6 @@ struct App {
     cursor: CursorPos,
     plan: Plan,
     log: Vec<String>,
-    summary_scroll: u16,
     run_index: usize,
     run_steps: Vec<String>,
     should_quit: bool,
@@ -299,24 +355,23 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        // Strictly ordered, following the source plan.
         let options = vec![
             OptionItem::new(
                 "gnome",
                 "Install GNOME?",
-                "pacman -S gdm gnome + systemctl enable --now gdm",
-                false, // default N
+                "gdm, gnome + enable gdm",
+                false,
             ),
             OptionItem::new(
                 "gnome_theme",
                 "Are you using GNOME?",
-                "adw-gtk-theme, gnome-tweaks, gnome-sound-recorder + gsettings (dark)",
-                true, // default Y
+                "adw-gtk-theme, gnome-tweaks, gnome-sound-recorder + dark theme",
+                true,
             ),
             OptionItem::new(
                 "fonts",
                 "Install emoji & language fonts?",
-                "ttf-dejavu, ttf-liberation, noto-fonts, noto-fonts-emoji, noto-fonts-cjk, ...",
+                "ttf-dejavu, ttf-liberation, noto-fonts, noto-fonts-emoji, noto-fonts-cjk",
                 true,
             ),
             OptionItem::new(
@@ -334,7 +389,7 @@ impl App {
             OptionItem::new(
                 "boot",
                 "Speed up boot?",
-                "sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf",
+                "set bootloader timeout to 1s",
                 true,
             ),
             OptionItem::new(
@@ -352,14 +407,14 @@ impl App {
             OptionItem::new(
                 "firmware",
                 "Install CPU/GPU firmware?",
-                "Auto-detect CPU (Intel/AMD) and GPU (NVIDIA/AMD)",
+                "auto-detect CPU (Intel/AMD) and GPU (NVIDIA/AMD)",
                 true,
             ),
             OptionItem::new(
                 "vm",
                 "Install a virtual machine?",
                 "VirtualBox or GNOME Boxes",
-                false, // default N
+                false,
             ),
         ];
 
@@ -369,7 +424,6 @@ impl App {
             cursor: CursorPos::Option(0),
             plan: Plan::default(),
             log: Vec::new(),
-            summary_scroll: 0,
             run_index: 0,
             run_steps: Vec::new(),
             should_quit: false,
@@ -406,183 +460,87 @@ impl App {
         }
     }
 
-    /// Mark all options per their current Y/N and build the install plan.
-    fn build_plan(&mut self) {
-        for o in &mut self.options {
-            o.enabled = o.choice.as_bool();
-        }
+    fn is_on(&self, key: &str) -> bool {
+        self.options
+            .iter()
+            .find(|o| o.key == key)
+            .map(|o| o.choice == Choice::Yes)
+            .unwrap_or(false)
+    }
 
+    fn build_plan(&mut self) {
         let mut plan = Plan::default();
 
-        let gnome_on = self.options.iter().find(|o| o.key == "gnome").map(|o| o.enabled).unwrap_or(false);
-        let gnome_theme_on = self
-            .options
-            .iter()
-            .find(|o| o.key == "gnome_theme")
-            .map(|o| o.enabled)
-            .unwrap_or(false);
-        let fonts_on = self.options.iter().find(|o| o.key == "fonts").map(|o| o.enabled).unwrap_or(false);
-        let bt_on = self.options.iter().find(|o| o.key == "bluetooth").map(|o| o.enabled).unwrap_or(false);
-        let locale_on = self.options.iter().find(|o| o.key == "locale").map(|o| o.enabled).unwrap_or(false);
-        let boot_on = self.options.iter().find(|o| o.key == "boot").map(|o| o.enabled).unwrap_or(false);
-        let dev_on = self.options.iter().find(|o| o.key == "devtools").map(|o| o.enabled).unwrap_or(false);
-        let flatpak_on = self.options.iter().find(|o| o.key == "flatpak").map(|o| o.enabled).unwrap_or(false);
-        let fw_on = self.options.iter().find(|o| o.key == "firmware").map(|o| o.enabled).unwrap_or(false);
-        let vm_on = self.options.iter().find(|o| o.key == "vm").map(|o| o.enabled).unwrap_or(false);
-
-        // 1. GNOME install
-        if gnome_on {
-            plan.add_pacman(&["gdm", "gnome"]);
-            plan.add_post("systemctl enable --now gdm");
+        if self.is_on("gnome") {
+            plan.add_pacman(PACMAN_GNOME);
+            plan.add_post(CMD_ENABLE_GDM);
         }
 
-        // 2. GNOME theme
-        if gnome_theme_on {
-            plan.add_pacman(&["adw-gtk-theme", "gnome-tweaks", "gnome-sound-recorder"]);
+        if self.is_on("gnome_theme") {
+            plan.add_pacman(PACMAN_GNOME_THEME);
             if let Some((user, uid)) = detect_active_user() {
-                let cmd = format!(
-                    "export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus && \
-                     su - {user} -c \"gsettings set org.gnome.desktop.interface gtk-theme 'adw-gtk3-dark' && \
-                     gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' && \
-                     gsettings set org.gnome.shell disable-extension-version-validation true\"",
-                    uid = uid,
-                    user = user
-                );
-                plan.add_post(&cmd);
+                plan.add_post(&gnome_gsettings_cmd(&user, uid));
             }
         }
 
-        // 3. Fonts
-        if fonts_on {
-            plan.add_pacman(&[
-                "ttf-dejavu",
-                "ttf-liberation",
-                "ttf-arphic-ukai",
-                "ttf-arphic-uming",
-                "ttf-sazanami",
-                "noto-fonts",
-                "noto-fonts-emoji",
-                "noto-fonts-cjk",
-            ]);
+        if self.is_on("fonts") {
+            plan.add_pacman(PACMAN_FONTS);
         }
 
-        // 4. Bluetooth
-        if bt_on {
-            plan.add_post("systemctl enable --now bluetooth");
+        if self.is_on("bluetooth") {
+            plan.add_post(CMD_ENABLE_BLUETOOTH);
         }
 
-        // 5. Locale
-        if locale_on {
-            plan.add_post("localectl set-locale ru_RU.UTF-8");
+        if self.is_on("locale") {
+            plan.add_post(CMD_SET_LOCALE);
         }
 
-        // 6. Boot
-        if boot_on {
-            plan.add_post("sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf");
+        if self.is_on("boot") {
+            plan.add_post(CMD_BOOT_TIMEOUT);
         }
 
-        // 7. Dev tools
-        if dev_on {
-            plan.add_pacman(&[
-                // Group 1: pacman-contrib
-                "pacman-contrib",
-                // Group 2: filesystems
-                "btrfs-progs", "xfsprogs", "f2fs-tools", "exfatprogs", "udftools",
-                "ntfs-3g", "ntfsprogs", "dosfstools", "e2fsprogs", "cryptsetup",
-                // Group 3: forensics
-                "binwalk", "squashfs-tools", "mtd-utils", "uboot-tools",
-                "udisks2", "usbutils",
-                // Group 4: gvfs
-                "gvfs", "fuse2", "fuse3",
-                // Group 5: crypto
-                "openssl", "nss",
-                // Group 6: android
-                "android-tools", "scrcpy",
-                // Group 7: misc
-                "jhead", "pixman",
-                // Group 8: java / xorg
-                "jdk8-openjdk", "jre8-openjdk", "jre8-openjdk-headless",
-                "jdk-openjdk", "xorg-xrandr",
-                // Group 9: build tools
-                "git", "base-devel", "devtools", "fakeroot", "meson", "ninja",
-                "pkgconfig", "glib2", "libusb", "systemd-libs",
-                "gdk-pixbuf2", "cairo", "gcc",
-                // Group 10: containers
-                "docker", "docker-compose",
-            ]);
-            plan.add_post("systemctl enable --now docker");
+        if self.is_on("devtools") {
+            plan.add_pacman(PACMAN_DEVTOOLS);
+            plan.add_post(CMD_ENABLE_DOCKER);
         }
 
-        // 8. Flatpak
-        if flatpak_on {
+        if self.is_on("flatpak") {
             if !command_exists("flatpak") {
-                plan.add_pacman(&["flatpak"]);
+                plan.add_pacman(PACMAN_FLATPAK);
             }
-            plan.add_post(
-                "flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo",
-            );
-            plan.add_flatpak(&[
-                "com.mattjakeman.ExtensionManager",
-                "org.polymc.PolyMC",
-                "org.chromium.Chromium",
-                "us.zoom.Zoom",
-            ]);
+            plan.add_post(CMD_FLATPAK_REMOTE);
+            plan.add_flatpak(FLATPAK_APPS);
         }
 
-        // 9. Firmware
-        if fw_on {
-            plan.add_pacman(&[
-                "pipewire", "pipewire-alsa", "pipewire-pulse", "wireplumber",
-                "alsa-utils", "sof-firmware", "alsa-ucm-conf",
-                "v4l-utils", "bluez", "bluez-utils", "pciutils",
-            ]);
+        if self.is_on("firmware") {
+            plan.add_pacman(PACMAN_FIRMWARE_BASE);
 
             let cpu = detect_cpu_vendor();
-            let gpu = detect_gpu_info();
+            let gpu = detect_gpu_info().to_lowercase();
 
             if cpu == "GenuineIntel" {
-                plan.add_pacman(&[
-                    "mesa", "mesa-utils", "libva-intel-driver", "intel-media-driver",
-                    "vulkan-intel", "lib32-vulkan-intel", "lib32-mesa",
-                ]);
+                plan.add_pacman(PACMAN_FIRMWARE_INTEL);
             } else if cpu == "AuthenticAMD" {
-                plan.add_pacman(&[
-                    "mesa", "mesa-utils", "vulkan-radeon", "lib32-vulkan-radeon",
-                    "libva-mesa-driver", "lib32-mesa",
-                ]);
+                plan.add_pacman(PACMAN_FIRMWARE_AMD_CPU);
             }
 
-            let gpu_lc = gpu.to_lowercase();
-            if gpu_lc.contains("nvidia") {
-                plan.add_pacman(&[
-                    "nvidia", "nvidia-utils", "nvidia-settings", "lib32-nvidia-utils",
-                    "vulkan-icd-loader", "lib32-vulkan-icd-loader",
-                    "libvdpau", "lib32-libvdpau",
-                    "opencl-nvidia", "lib32-opencl-nvidia",
-                ]);
+            if gpu.contains("nvidia") {
+                plan.add_pacman(PACMAN_FIRMWARE_NVIDIA);
             }
-            if gpu_lc.contains("amd") || gpu_lc.contains("ati") || gpu_lc.contains("radeon") {
-                plan.add_pacman(&[
-                    "mesa", "mesa-utils", "vulkan-radeon", "lib32-vulkan-radeon",
-                    "libva-mesa-driver", "lib32-mesa",
-                ]);
+            if gpu.contains("amd") || gpu.contains("ati") || gpu.contains("radeon") {
+                plan.add_pacman(PACMAN_FIRMWARE_AMD_GPU);
             }
         }
 
-        // 10. VM
-        if vm_on {
-            plan.add_pacman(&[
-                "virtualbox", "virtualbox-host-modules-arch",
-                "gnome-boxes",
-            ]);
-            plan.add_post("groupadd -f vboxusers");
-            plan.add_post("modprobe vboxdrv");
+        if self.is_on("vm") {
+            plan.add_pacman(PACMAN_VM);
+            plan.add_post(CMD_VBOX_GROUP);
+            plan.add_post(CMD_VBOX_MODPROBE);
         }
 
         plan.dedup();
         self.plan = plan;
 
-        // Build step list for the running screen
         let mut steps: Vec<String> = Vec::new();
         if !self.plan.pacman.is_empty() {
             steps.push(format!(
@@ -624,10 +582,6 @@ impl App {
     }
 }
 
-// ============================================================
-// UI
-// ============================================================
-
 fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -639,7 +593,6 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
         ])
         .split(f.size());
 
-    // --- Title ---
     let title_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -653,7 +606,6 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
     .block(title_block);
     f.render_widget(title, chunks[0]);
 
-    // --- Options + buttons ---
     let mut items: Vec<ListItem> = Vec::new();
     let mut selected_line: usize = 0;
 
@@ -702,7 +654,6 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
         items.push(ListItem::new(line));
     }
 
-    // Install button
     let install_selected = app.cursor == CursorPos::Install;
     if install_selected {
         selected_line = app.options.len();
@@ -716,7 +667,6 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
         },
     )])));
 
-    // Exit button
     let exit_selected = app.cursor == CursorPos::Exit;
     if exit_selected {
         selected_line = app.options.len() + 1;
@@ -741,14 +691,13 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
     st.select(Some(selected_line));
     f.render_stateful_widget(list, chunks[1], &mut st);
 
-    // --- Help / status bar ---
     let (help_title, help_body) = match app.cursor {
         CursorPos::Option(i) => (" Help ", app.options[i].help.to_string()),
-        CursorPos::Install => (" Action ", "Build the plan and start installing".to_string()),
+        CursorPos::Install => (" Action ", "Install all selected items".to_string()),
         CursorPos::Exit => (" Action ", "Quit without making changes".to_string()),
     };
 
-    let keys = "↑/↓ navigate  •  ←/→ or y/n toggle  •  Enter = activate  •  a = all Y  •  n = all N  •  q = quit";
+    let keys = "Up/Down navigate  |  Left/Right or y/n toggle  |  Enter = activate  |  a = all Y  |  d = all N  |  q = quit";
 
     let help_block = Block::default()
         .title(Span::styled(help_title, Theme::block_title()))
@@ -763,84 +712,6 @@ fn draw_checklist(f: &mut ratatui::Frame, app: &App) {
     .alignment(Alignment::Center)
     .block(help_block);
     f.render_widget(help_widget, chunks[2]);
-}
-
-fn draw_summary(f: &mut ratatui::Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(2)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(5),
-            Constraint::Length(3),
-        ])
-        .split(f.size());
-
-    let title_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let title = Paragraph::new(Line::from(vec![Span::styled(
-        "Summary",
-        Theme::header_style(),
-    )]))
-    .alignment(Alignment::Center)
-    .block(title_block);
-    f.render_widget(title, chunks[0]);
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    lines.push(Line::from(Span::styled(
-        format!("Pacman packages ({}):", app.plan.pacman.len()),
-        Theme::warn(),
-    )));
-    for p in &app.plan.pacman {
-        lines.push(Line::from(Span::styled(format!("   {}", p), Theme::dim_item())));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!("Flatpak packages ({}):", app.plan.flatpak.len()),
-        Theme::warn(),
-    )));
-    for p in &app.plan.flatpak {
-        lines.push(Line::from(Span::styled(format!("   {}", p), Theme::dim_item())));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!("Post-install commands ({}):", app.plan.post.len()),
-        Theme::warn(),
-    )));
-    for c in &app.plan.post {
-        let short = if c.len() > 100 { &c[..100] } else { c };
-        lines.push(Line::from(Span::styled(format!("   {}", short), Theme::dim_item())));
-    }
-
-    let body_block = Block::default()
-        .title(Span::styled(" Plan ", Theme::block_title()))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Theme::dim_item());
-
-    let body = Paragraph::new(lines)
-        .block(body_block)
-        .scroll((app.summary_scroll, 0));
-    f.render_widget(body, chunks[1]);
-
-    let help_block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Theme::dim_item());
-
-    let help = Paragraph::new(Span::styled(
-        "Enter = install  •  Esc = back  •  ↑/↓ scroll  •  q = quit",
-        Style::default().fg(Color::Gray),
-    ))
-    .alignment(Alignment::Center)
-    .block(help_block);
-    f.render_widget(help, chunks[2]);
 }
 
 fn draw_running(f: &mut ratatui::Frame, app: &App) {
@@ -962,20 +833,14 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 fn draw(f: &mut ratatui::Frame, app: &App) {
     match app.screen {
         Screen::Checklist => draw_checklist(f, app),
-        Screen::Summary => draw_summary(f, app),
         Screen::Running => draw_running(f, app),
         Screen::Done => draw_done(f),
     }
 }
 
-// ============================================================
-// Main loop
-// ============================================================
-
 fn main() {
     ensure_root();
 
-    // TUI setup
     enable_raw_mode().expect("enable_raw_mode");
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen).expect("enter alt screen");
@@ -1014,38 +879,17 @@ fn main() {
                     KeyCode::Enter => match app.cursor {
                         CursorPos::Install => {
                             app.build_plan();
-                            app.screen = Screen::Summary;
+                            app.screen = Screen::Running;
+                            app.log.clear();
+                            app.run_index = 0;
                         }
                         CursorPos::Exit => app.should_quit = true,
-                        CursorPos::Option(_) => {
-                            // Enter on an option flips it
-                            app.flip_choice();
-                        }
+                        CursorPos::Option(_) => app.flip_choice(),
                     },
                     KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
                     _ => {}
                 },
-                Screen::Summary => match key.code {
-                    KeyCode::Enter => {
-                        app.screen = Screen::Running;
-                        app.log.clear();
-                        app.run_index = 0;
-                    }
-                    KeyCode::Esc | KeyCode::Backspace => {
-                        app.screen = Screen::Checklist;
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        app.summary_scroll = app.summary_scroll.saturating_sub(1);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        app.summary_scroll = app.summary_scroll.saturating_add(1);
-                    }
-                    KeyCode::Char('q') => app.should_quit = true,
-                    _ => {}
-                },
-                Screen::Running => {
-                    // Blocking run handled after the draw
-                }
+                Screen::Running => {}
                 Screen::Done => match key.code {
                     KeyCode::Enter | KeyCode::Esc | KeyCode::Char('q') => {
                         app.should_quit = true;
@@ -1056,7 +900,6 @@ fn main() {
         }
 
         if app.screen == Screen::Running {
-            // Temporarily leave the TUI so shell commands print their own output
             let _ = disable_raw_mode();
             let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
             let _ = terminal.show_cursor();
@@ -1080,20 +923,17 @@ fn main() {
                 }
             }
 
-            // Re-enter the TUI
             let _ = enable_raw_mode();
             let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
             let _ = terminal.clear();
             let _ = io::stdout().flush();
 
-            // Drain stale key events
             while crossterm::event::poll(Duration::from_millis(0)).unwrap_or(false) {
                 let _ = crossterm::event::read();
             }
         }
     }
 
-    // Restore terminal
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
     let _ = terminal.show_cursor();
