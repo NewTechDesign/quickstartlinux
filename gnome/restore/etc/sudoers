@@ -1,2 +1,2 @@
-Defaults:alina rootpw
-alina ALL=(ALL:ALL) ALL
+Defaults:USER rootpw
+USER ALL=(ALL:ALL) ALL
