@@ -201,10 +201,47 @@ if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
             # 4. Copy .local into user's home
             POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
 
-            # 5. Cleanup
-            POST_COMMANDS+=("rm -rf /tmp/quickstartlinux")
+            # NOTE: Cleanup is intentionally moved to section 2d, so that
+            # the sudoers restore (2c) can reuse the same cloned repo.
         fi
     fi
+fi
+
+# ============================================================
+# 2c. Restore sudoers settings?
+# ============================================================
+RESTORE_SUDOERS=false
+if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
+    RESTORE_SUDOERS=true
+
+    # Reuse the detected user, or detect if not set yet
+    if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
+        detect_active_user
+    fi
+
+    if [[ -z "$ACTIVE_USER" ]]; then
+        echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
+    else
+        # 1. Clone repo (if not already cloned by section 2b)
+        POST_COMMANDS+=("if [[ ! -d /tmp/quickstartlinux ]]; then git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; fi")
+
+        # 2. Replace USER placeholder with the actual username in the repo's sudoers file
+        POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' /tmp/quickstartlinux/gnome/restore/etc/sudoers; fi")
+
+        # 3. Append sudoers content from the repo to /etc/sudoers,
+        #    but only if it is not already present (avoid duplicates).
+        POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then if ! grep -qFf /tmp/quickstartlinux/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat /tmp/quickstartlinux/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
+
+        # 4. Validate sudoers syntax
+        POST_COMMANDS+=("visudo -cf /etc/sudoers")
+    fi
+fi
+
+# ============================================================
+# 2d. Cleanup quickstartlinux (once, if anything used it)
+# ============================================================
+if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" || "$RESTORE_SUDOERS" == "true" ]]; then
+    POST_COMMANDS+=("rm -rf /tmp/quickstartlinux")
 fi
 
 # ============================================================
