@@ -14,8 +14,9 @@ PACMAN_PACKAGES=()
 FLATPAK_PACKAGES=()
 POST_COMMANDS=()
 
-# Flag: install firmware?
+# Flags
 INSTALL_FIRMWARE=false
+TUNE_GRUB=false
 
 # Helper: check if a command exists
 command_exists() {
@@ -122,6 +123,136 @@ detect_active_user() {
             ACTIVE_HOME="/home/${ACTIVE_USER}"
         fi
     fi
+}
+
+# Helper: detect the bootloader in use
+# Echoes one of: grub, systemd-boot, unknown
+detect_bootloader() {
+    # GRUB: /etc/default/grub exists and/or grub.cfg present under /boot
+    if [[ -f /etc/default/grub ]]; then
+        echo "grub"
+        return 0
+    fi
+    if find /boot -maxdepth 3 -name grub.cfg -print -quit 2>/dev/null | grep -q .; then
+        echo "grub"
+        return 0
+    fi
+
+    # systemd-boot: /boot/loader/loader.conf exists
+    if [[ -f /boot/loader/loader.conf ]]; then
+        echo "systemd-boot"
+        return 0
+    fi
+
+    # Fallback: check EFI entries
+    if command_exists bootctl; then
+        if bootctl status 2>/dev/null | grep -qi 'systemd-boot'; then
+            echo "systemd-boot"
+            return 0
+        fi
+    fi
+
+    echo "unknown"
+}
+
+# Helper: tune GRUB (remove quiet, set loglevel=3, regenerate config)
+tune_grub() {
+    local FILE=/etc/default/grub
+
+    if [[ ! -f "$FILE" ]]; then
+        echo -e "${YELLOW}GRUB config not found ($FILE), skipping.${NC}"
+        return 0
+    fi
+
+    local BAK
+    BAK="$(mktemp /tmp/grub.bak.XXXXXX)" || {
+        echo -e "${RED}Could not create backup in /tmp${NC}" >&2
+        return 1
+    }
+
+    if ! cp -a "$FILE" "$BAK"; then
+        echo -e "${RED}cp failed${NC}" >&2
+        rm -f "$BAK"
+        return 1
+    fi
+    echo -e "${GREEN}Backup: $BAK${NC}"
+
+    # --- rollback / cleanup ---
+    local DONE=0
+    cleanup_grub() {
+        if [[ "$DONE" -ne 1 && -f "$BAK" ]]; then
+            echo -e "${YELLOW}Rolling back from $BAK${NC}" >&2
+            cp -a "$BAK" "$FILE"
+        fi
+        rm -f "$BAK"
+        echo -e "${YELLOW}Backup $BAK removed${NC}" >&2
+    }
+    trap cleanup_grub INT TERM EXIT
+
+    # --- current value ---
+    local current
+    current=$(sed -nE 's/^GRUB_CMDLINE_LINUX_DEFAULT="(.*)"$/\1/p' "$FILE" | head -n1)
+    current="${current:-}"
+
+    # --- new value ---
+    local new
+    new=$(printf '%s\n' "$current" \
+        | tr ' ' '\n' \
+        | grep -vxE 'quiet|loglevel=[0-9]+' \
+        | grep -v '^$' \
+        | tr '\n' ' ' || true)
+    new="${new}loglevel=3"
+    new="${new% }"
+
+    # --- write ---
+    sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${new}\"|" "$FILE"
+
+    # --- verify ---
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT="' "$FILE" \
+       && grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT="[^"]*"$' "$FILE" \
+       && grep -q 'loglevel=3' "$FILE" \
+       && ! grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT=".*\bquiet\b.*"' "$FILE"; then
+        echo -e "${GREEN}GRUB cmdline OK${NC}"
+        DONE=1
+    else
+        echo -e "${RED}Verification failed — restoring from backup${NC}" >&2
+    fi
+
+    echo
+    echo -e "Before: ${YELLOW}$current${NC}"
+    echo -e "After:  ${GREEN}$new${NC}"
+    echo "Current line:"
+    grep '^GRUB_CMDLINE_LINUX_DEFAULT=' "$FILE" || true
+
+    # --- regenerate grub config only on success ---
+    if [[ "$DONE" -eq 1 ]]; then
+        echo
+        echo -e "${GREEN}>>> Regenerating GRUB configuration...${NC}"
+
+        local GRUB_CFG
+        GRUB_CFG="$(find /boot -name grub.cfg -print -quit 2>/dev/null || true)"
+
+        if [[ -z "$GRUB_CFG" ]]; then
+            echo -e "${RED}Could not find grub.cfg under /boot — skipping grub-mkconfig${NC}" >&2
+            return 1
+        fi
+
+        if grub-mkconfig -o "$GRUB_CFG"; then
+            echo -e "${GREEN}GRUB configuration regenerated: $GRUB_CFG${NC}"
+        else
+            echo -e "${RED}grub-mkconfig failed${NC}" >&2
+            return 1
+        fi
+    else
+        echo -e "${RED}Skipping grub-mkconfig due to failed verification${NC}" >&2
+        return 1
+    fi
+
+    # success — disable rollback
+    DONE=1
+    trap - INT TERM EXIT
+    cleanup_grub
+    return 0
 }
 
 echo -e "${GREEN}=== Arch Linux Setup Script ===${NC}"
@@ -266,11 +397,24 @@ if ask_question "Set locale to ru_RU.UTF-8?" "Y"; then
 fi
 
 # ============================================================
-# 6. Speed up boot?
+# 6. Speed up boot? (auto-detect bootloader: GRUB or systemd-boot)
 # ============================================================
-if ask_question "Speed up boot (set bootloader timeout to 1s)?" "Y"; then
-    POST_COMMANDS+=("sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf")
-fi
+BOOTLOADER="$(detect_bootloader)"
+echo -e "${GREEN}Detected bootloader: ${YELLOW}${BOOTLOADER}${NC}"
+echo
+
+case "$BOOTLOADER" in
+    systemd-boot)
+        if ask_question "Speed up boot (set systemd-boot timeout to 1s)?" "Y"; then
+            POST_COMMANDS+=("sed -i 's/^timeout .*/timeout 1/' /boot/loader/loader.conf")
+        fi
+        ;;
+    grub)
+        if ask_question "Tune GRUB (remove 'quiet', set loglevel=3)?" "Y"; then
+            TUNE_GRUB=true
+        fi
+        ;;
+esac
 
 # ============================================================
 # 7. Install dev & utility tools?
@@ -452,6 +596,12 @@ else
 fi
 
 echo
+echo -e "${YELLOW}Bootloader detected:${NC} ${BOOTLOADER}"
+if [[ "$TUNE_GRUB" == "true" ]]; then
+    echo -e "${YELLOW}GRUB tuning:${NC} enabled (will run grub-mkconfig after install)"
+fi
+
+echo
 read -rp "$(echo -e "${YELLOW}Proceed with installation? [Y/n]: ${NC}")" CONFIRM
 CONFIRM="${CONFIRM:-Y}"
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
@@ -471,12 +621,12 @@ if [[ ${#PACMAN_PACKAGES[@]} -gt 0 ]]; then
 fi
 
 # ============================================================
-# INSTALL FLATPAK PACKAGES
+# TUNE GRUB (after packages are installed)
 # ============================================================
-if [[ ${#FLATPAK_PACKAGES[@]} -gt 0 ]]; then
+if [[ "$TUNE_GRUB" == "true" ]]; then
     echo
-    echo -e "${GREEN}>>> Installing Flatpak packages...${NC}"
-    flatpak install --system -y flathub "${FLATPAK_PACKAGES[@]}"
+    echo -e "${GREEN}>>> Tuning GRUB...${NC}"
+    tune_grub || echo -e "${RED}Warning: GRUB tuning failed.${NC}"
 fi
 
 # ============================================================
@@ -489,6 +639,15 @@ if [[ ${#POST_COMMANDS[@]} -gt 0 ]]; then
         echo -e "${YELLOW}Running: ${cmd}${NC}"
         eval "$cmd" || echo -e "${RED}Warning: command failed: ${cmd}${NC}"
     done
+fi
+
+# ============================================================
+# INSTALL FLATPAK PACKAGES
+# ============================================================
+if [[ ${#FLATPAK_PACKAGES[@]} -gt 0 ]]; then
+    echo
+    echo -e "${GREEN}>>> Installing Flatpak packages...${NC}"
+    flatpak install --system -y flathub "${FLATPAK_PACKAGES[@]}"
 fi
 
 echo
