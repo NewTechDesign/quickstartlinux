@@ -155,7 +155,36 @@ detect_bootloader() {
     echo "unknown"
 }
 
-# Helper: tune GRUB (remove quiet, set loglevel=3, regenerate config)
+# Helper: set or update a GRUB variable in /etc/default/grub
+# Usage: set_grub_var "VAR_NAME" "value"
+# - If VAR=... exists (commented or not) -> replace the line
+# - If VAR is not present at all -> append it
+set_grub_var() {
+    local var="$1"
+    local value="$2"
+    local file="/etc/default/grub"
+
+    if [[ ! -f "$file" ]]; then
+        echo -e "${RED}GRUB config not found: $file${NC}" >&2
+        return 1
+    fi
+
+    # Escape value for use in sed replacement (handles /, &, \)
+    local esc_value
+    esc_value=$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')
+
+    if grep -qE "^[[:space:]]*#?[[:space:]]*${var}=" "$file"; then
+        # Replace existing (possibly commented) line
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*${var}=.*|${var}=${esc_value}|" "$file"
+        echo -e "${GREEN}Updated: ${var}=${value}${NC}"
+    else
+        # Append new line
+        printf '%s=%s\n' "$var" "$value" >> "$file"
+        echo -e "${GREEN}Added:   ${var}=${value}${NC}"
+    fi
+}
+
+# Helper: tune GRUB (remove quiet, set loglevel=3, set custom options, regenerate config)
 tune_grub() {
     local FILE=/etc/default/grub
 
@@ -189,12 +218,12 @@ tune_grub() {
     }
     trap cleanup_grub INT TERM EXIT
 
-    # --- current value ---
+    # --- current value of GRUB_CMDLINE_LINUX_DEFAULT ---
     local current
     current=$(sed -nE 's/^GRUB_CMDLINE_LINUX_DEFAULT="(.*)"$/\1/p' "$FILE" | head -n1)
     current="${current:-}"
 
-    # --- new value ---
+    # --- new value for GRUB_CMDLINE_LINUX_DEFAULT ---
     local new
     new=$(printf '%s\n' "$current" \
         | tr ' ' '\n' \
@@ -204,14 +233,29 @@ tune_grub() {
     new="${new}loglevel=3"
     new="${new% }"
 
-    # --- write ---
+    # --- write GRUB_CMDLINE_LINUX_DEFAULT ---
     sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${new}\"|" "$FILE"
+
+    # --- write custom GRUB options ---
+    # Each of these: add if missing, uncomment if commented, set to the exact value.
+    set_grub_var "GRUB_DISABLE_BOOTNEXT"      "true"
+    set_grub_var "GRUB_DISABLE_UEFI_FIRMWARE" "false"
+    set_grub_var "GRUB_DISABLE_SUBMENU"       "y"
+    set_grub_var "GRUB_DISABLE_OS_PROBER"     "false"
+    set_grub_var "GRUB_GFXMODE"               "auto"
+    set_grub_var "GRUB_TIMEOUT_STYLE"         "menu"
 
     # --- verify ---
     if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT="' "$FILE" \
        && grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT="[^"]*"$' "$FILE" \
        && grep -q 'loglevel=3' "$FILE" \
-       && ! grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT=".*\bquiet\b.*"' "$FILE"; then
+       && ! grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT=".*\bquiet\b.*"' "$FILE" \
+       && grep -q '^GRUB_DISABLE_BOOTNEXT=true$' "$FILE" \
+       && grep -q '^GRUB_DISABLE_UEFI_FIRMWARE=false$' "$FILE" \
+       && grep -q '^GRUB_DISABLE_SUBMENU=y$' "$FILE" \
+       && grep -q '^GRUB_DISABLE_OS_PROBER=false$' "$FILE" \
+       && grep -q '^GRUB_GFXMODE=auto$' "$FILE" \
+       && grep -q '^GRUB_TIMEOUT_STYLE=menu$' "$FILE"; then
         echo -e "${GREEN}GRUB cmdline OK${NC}"
         DONE=1
     else
@@ -223,6 +267,10 @@ tune_grub() {
     echo -e "After:  ${GREEN}$new${NC}"
     echo "Current line:"
     grep '^GRUB_CMDLINE_LINUX_DEFAULT=' "$FILE" || true
+
+    echo
+    echo "Custom GRUB options:"
+    grep -E '^(GRUB_DISABLE_BOOTNEXT|GRUB_DISABLE_UEFI_FIRMWARE|GRUB_DISABLE_SUBMENU|GRUB_DISABLE_OS_PROBER|GRUB_GFXMODE|GRUB_TIMEOUT_STYLE)=' "$FILE" || true
 
     # --- regenerate grub config only on success ---
     if [[ "$DONE" -eq 1 ]]; then
@@ -410,7 +458,7 @@ case "$BOOTLOADER" in
         fi
         ;;
     grub)
-        if ask_question "Tune GRUB (remove 'quiet', set loglevel=3)?" "Y"; then
+        if ask_question "Tune GRUB (remove 'quiet', set loglevel=3, apply custom GRUB options)?" "Y"; then
             TUNE_GRUB=true
         fi
         ;;
@@ -599,6 +647,13 @@ echo
 echo -e "${YELLOW}Bootloader detected:${NC} ${BOOTLOADER}"
 if [[ "$TUNE_GRUB" == "true" ]]; then
     echo -e "${YELLOW}GRUB tuning:${NC} enabled (will run grub-mkconfig after install)"
+    echo -e "${YELLOW}Custom GRUB options to be applied:${NC}"
+    echo "  GRUB_DISABLE_BOOTNEXT=true"
+    echo "  GRUB_DISABLE_UEFI_FIRMWARE=false"
+    echo "  GRUB_DISABLE_SUBMENU=y"
+    echo "  GRUB_DISABLE_OS_PROBER=false"
+    echo "  GRUB_GFXMODE=auto"
+    echo "  GRUB_TIMEOUT_STYLE=menu"
 fi
 
 echo
