@@ -239,6 +239,7 @@ tune_grub() {
     sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${new}\"|" "$FILE"
 
     # --- write custom GRUB options ---
+    # Each of these: add if missing, uncomment if commented, set to the exact value.
     set_grub_var "GRUB_DISABLE_BOOTNEXT"      "true"
     set_grub_var "GRUB_DISABLE_UEFI_FIRMWARE" "false"
     set_grub_var "GRUB_DISABLE_SUBMENU"       "y"
@@ -471,6 +472,7 @@ if ask_question "Are you using GNOME?" "Y"; then
     USE_GNOME=true
     PACMAN_PACKAGES+=(adw-gtk-theme gnome-tweaks gnome-sound-recorder)
 
+    # Detect the active user once and reuse it
     detect_active_user
 
     if [[ -n "$ACTIVE_UID" ]]; then
@@ -486,6 +488,7 @@ fi
 if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
     if ask_question "Restore GNOME settings from quickstartlinux?" "Y"; then
 
+        # Reuse the detected user, or detect if not set yet
         if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
             detect_active_user
         fi
@@ -495,11 +498,23 @@ if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
         else
             echo -e "${GREEN}Restoring GNOME settings for user: ${ACTIVE_USER} (UID ${ACTIVE_UID})${NC}"
 
+            # 1. Clone repo
             POST_COMMANDS+=("rm -rf /tmp/quickstartlinux && git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux")
+
+            # 2. Apply dconf settings as the active user (with DBus session)
             POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < /tmp/quickstartlinux/gnome/restore/dconf-settings.ini'")
+
+            # 3. Copy gtk-3.0 into user's ~/.config
             POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a /tmp/quickstartlinux/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
+
+            # 3b. Replace USER placeholder in gtk-3.0/bookmarks with the actual username
             POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
+
+            # 4. Copy .local into user's home
             POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
+
+            # NOTE: Cleanup is intentionally moved to section 2d, so that
+            # the sudoers restore (2c) can reuse the same cloned repo.
         fi
     fi
 fi
@@ -511,6 +526,7 @@ RESTORE_SUDOERS=false
 if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     RESTORE_SUDOERS=true
 
+    # Reuse the detected user, or detect if not set yet
     if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
         detect_active_user
     fi
@@ -518,9 +534,17 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     if [[ -z "$ACTIVE_USER" ]]; then
         echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
     else
+        # 1. Clone repo (if not already cloned by section 2b)
         POST_COMMANDS+=("if [[ ! -d /tmp/quickstartlinux ]]; then git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; fi")
+
+        # 2. Replace USER placeholder with the actual username in the repo's sudoers file
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' /tmp/quickstartlinux/gnome/restore/etc/sudoers; fi")
+
+        # 3. Append sudoers content from the repo to /etc/sudoers,
+        #    but only if it is not already present (avoid duplicates).
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then if ! grep -qFf /tmp/quickstartlinux/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat /tmp/quickstartlinux/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
+
+        # 4. Validate sudoers syntax
         POST_COMMANDS+=("visudo -cf /etc/sudoers")
     fi
 fi
@@ -581,19 +605,41 @@ esac
 # ============================================================
 if ask_question "Install all development and utility tools?" "Y"; then
     PACMAN_PACKAGES+=(
+        # Base tools
         pacman-contrib
+
+        # Filesystems
         btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g ntfsprogs
         dosfstools e2fsprogs cryptsetup
+
+        # Forensics / embedded
         binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
+
+        # GVFS / FUSE
         gvfs fuse2 fuse3
+
+        # Crypto / SSL
         openssl nss
+
+        # Android
         android-tools scrcpy
+
+        # Misc
         jhead pixman
+
+        # Java / Xorg
         jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
+
+        # Build tools
         git base-devel devtools fakeroot meson ninja pkgconfig glib2 libusb
         systemd-libs gdk-pixbuf2 cairo gcc
+
+        # Containers
         docker docker-compose
     )
+
+    # Enable docker
+    # POST_COMMANDS+=("systemctl enable --now docker")
 fi
 
 # ============================================================
@@ -603,10 +649,12 @@ INSTALL_FLATPAK=false
 if ask_question "Install useful applications via Flatpak?" "Y"; then
     INSTALL_FLATPAK=true
 
+    # Ensure flatpak is available
     if ! command_exists flatpak; then
         PACMAN_PACKAGES+=(flatpak)
     fi
 
+    # Add flathub remote
     POST_COMMANDS+=("flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo")
 
     FLATPAK_PACKAGES+=(
@@ -619,6 +667,7 @@ fi
 
 # ============================================================
 # 9. Install firmware (auto-detect CPU & GPU)?
+#    Only ask the question here; detection happens later.
 # ============================================================
 if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     INSTALL_FIRMWARE=true
@@ -657,6 +706,7 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     echo
     echo -e "${GREEN}>>> Detecting CPU and GPU...${NC}"
 
+    # Base audio/video/bluetooth firmware
     PACMAN_PACKAGES+=(
         pipewire pipewire-alsa pipewire-pulse wireplumber alsa-utils
         sof-firmware alsa-ucm-conf v4l-utils bluez bluez-utils pciutils
@@ -665,24 +715,38 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     CPU_VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo | awk '{print $3}')
     GPU_INFO=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 
+    # Intel CPU
     if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
         echo -e "${GREEN}Intel CPU detected. Adding Intel packages...${NC}"
-        PACMAN_PACKAGES+=(mesa mesa-utils libva-intel-driver intel-media-driver vulkan-intel)
+        PACMAN_PACKAGES+=(
+            mesa mesa-utils libva-intel-driver intel-media-driver
+            vulkan-intel
+        )
     fi
 
+    # AMD CPU
     if [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
         echo -e "${GREEN}AMD CPU detected. Adding AMD packages...${NC}"
-        PACMAN_PACKAGES+=(mesa mesa-utils vulkan-radeon libva-mesa-driver)
+        PACMAN_PACKAGES+=(
+            mesa mesa-utils vulkan-radeon libva-mesa-driver
+        )
     fi
 
+    # NVIDIA GPU
     if echo "$GPU_INFO" | grep -qi nvidia; then
         echo -e "${GREEN}NVIDIA GPU detected. Adding NVIDIA packages...${NC}"
-        PACMAN_PACKAGES+=(nvidia nvidia-utils nvidia-settings vulkan-icd-loader libvdpau opencl-nvidia)
+        PACMAN_PACKAGES+=(
+            nvidia nvidia-utils nvidia-settings
+            vulkan-icd-loader libvdpau opencl-nvidia
+        )
     fi
 
+    # AMD GPU
     if echo "$GPU_INFO" | grep -qiE 'amd|ati|radeon'; then
         echo -e "${GREEN}AMD GPU detected. Adding AMD GPU packages...${NC}"
-        PACMAN_PACKAGES+=(mesa mesa-utils vulkan-radeon libva-mesa-driver)
+        PACMAN_PACKAGES+=(
+            mesa mesa-utils vulkan-radeon libva-mesa-driver
+        )
     fi
 fi
 
@@ -747,6 +811,7 @@ fi
 if [[ ${#PACMAN_PACKAGES[@]} -gt 0 ]]; then
     echo
     echo -e "${GREEN}>>> Installing pacman packages...${NC}"
+    # Deduplicate
     UNIQUE_PACMAN=($(printf '%s\n' "${PACMAN_PACKAGES[@]}" | awk '!seen[$0]++'))
     pacman -S --noconfirm --needed "${UNIQUE_PACMAN[@]}"
 fi
