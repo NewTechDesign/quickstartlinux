@@ -474,8 +474,10 @@ install_grub_theme() {
 
     cp -a "$src/." "$dst/"
 
-    local theme_txt="${dst}/theme.txt"
-    if [[ -f "$theme_txt" ]]; then
+    local theme_txt
+    theme_txt=$(find "$dst" -maxdepth 3 -name theme.txt -print -quit 2>/dev/null)
+
+    if [[ -n "$theme_txt" && -f "$theme_txt" ]]; then
         local new_title="$title"
         if [[ -z "${new_title// /}" ]]; then
             new_title="Bootloader"
@@ -499,6 +501,8 @@ install_grub_theme() {
         else
             echo -e "${YELLOW}    theme.txt: no text= line found, skipping title change${NC}"
         fi
+    else
+        echo -e "${RED}    theme.txt not found in ${dst} — theme may not work${NC}" >&2
     fi
 
     cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
@@ -506,9 +510,15 @@ install_grub_theme() {
     if grep -q '^GRUB_THEME=' /etc/default/grub; then
         sed -i '/^GRUB_THEME=/d' /etc/default/grub
     fi
-    echo "GRUB_THEME=\"${dst}/theme.txt\"" >> /etc/default/grub
 
-    echo -e "${GREEN}    GRUB_THEME set to ${dst}/theme.txt${NC}"
+    if [[ -n "$theme_txt" && -f "$theme_txt" ]]; then
+        echo "GRUB_THEME=\"${theme_txt}\"" >> /etc/default/grub
+        echo -e "${GREEN}    GRUB_THEME set to ${theme_txt}${NC}"
+    else
+        echo -e "${RED}    Cannot set GRUB_THEME — theme.txt not found${NC}" >&2
+        return 1
+    fi
+
     return 0
 }
 
