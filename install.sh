@@ -648,6 +648,8 @@ fi
 # 5. Set locale?
 # ============================================================
 if ask_question "Set locale to ru_RU.UTF-8?" "Y"; then
+    PACMAN_PACKAGES+=(kbd)
+
     # 1. Uncomment ru_RU.UTF-8 (and en_US.UTF-8 as fallback) in /etc/locale.gen
     POST_COMMANDS+=("if [[ -f /etc/locale.gen ]]; then sed -i -E 's/^#\\s*(ru_RU\\.UTF-8\\s+UTF-8)/\\1/' /etc/locale.gen; sed -i -E 's/^#\\s*(en_US\\.UTF-8\\s+UTF-8)/\\1/' /etc/locale.gen; fi")
 
@@ -659,6 +661,11 @@ if ask_question "Set locale to ru_RU.UTF-8?" "Y"; then
 
     # 4. (optional) Show result
     POST_COMMANDS+=("localectl status || true")
+
+    # 5. Cyrillic console font for TTY
+    POST_COMMANDS+=("if grep -q '^FONT=' /etc/vconsole.conf 2>/dev/null; then sed -i 's|^FONT=.*|FONT=UniCyrExt_8x16|' /etc/vconsole.conf; else echo 'FONT=UniCyrExt_8x16' >> /etc/vconsole.conf; fi")
+    POST_COMMANDS+=("setfont UniCyrExt_8x16 2>/dev/null || true")
+    POST_COMMANDS+=("systemctl restart systemd-vconsole-setup || true")
 fi
 
 # ============================================================
