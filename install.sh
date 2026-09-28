@@ -28,6 +28,10 @@ GRUB_THEME_SELECTED=""
 GRUB_THEME_TITLE=""
 GRUB_THEME_UNINSTALL=false
 
+# quickstartlinux repo
+QUICKSTART_REPO="https://github.com/NewTechDesign/quickstartlinux"
+QUICKSTART_DIR="/tmp/quickstartlinux"
+
 # Helper: check if a command exists
 command_exists() {
     command -v "$1" &>/dev/null
@@ -54,6 +58,23 @@ ensure_root() {
 
     echo -e "${RED}Error: neither pkexec nor sudo found. Please run as root.${NC}"
     exit 1
+}
+
+# Helper: ensure quickstartlinux is cloned (only once)
+ensure_quickstartlinux_cloned() {
+    if [[ -d "$QUICKSTART_DIR/.git" ]]; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}Cloning quickstartlinux...${NC}"
+    rm -rf "$QUICKSTART_DIR"
+
+    if git clone "$QUICKSTART_REPO" "$QUICKSTART_DIR"; then
+        return 0
+    fi
+
+    echo -e "${RED}Clone failed: $QUICKSTART_REPO${NC}" >&2
+    return 1
 }
 
 # Helper: ask a yes/no question
@@ -572,11 +593,15 @@ if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
         else
             echo -e "${GREEN}Restoring GNOME settings for user: ${ACTIVE_USER} (UID ${ACTIVE_UID})${NC}"
 
-            POST_COMMANDS+=("rm -rf /tmp/quickstartlinux && git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux")
-            POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < /tmp/quickstartlinux/gnome/restore/dconf-settings.ini'")
-            POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a /tmp/quickstartlinux/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
-            POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
-            POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
+            # Ensure the repo is present BEFORE adding post-commands that rely on it
+            if ensure_quickstartlinux_cloned; then
+                POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < ${QUICKSTART_DIR}/gnome/restore/dconf-settings.ini'")
+                POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a ${QUICKSTART_DIR}/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
+                POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
+                POST_COMMANDS+=("cp -a ${QUICKSTART_DIR}/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
+            else
+                echo -e "${RED}Warning: quickstartlinux clone failed. Skipping GNOME restore.${NC}"
+            fi
         fi
     fi
 fi
@@ -595,10 +620,13 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     if [[ -z "$ACTIVE_USER" ]]; then
         echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
     else
-        POST_COMMANDS+=("if [[ ! -d /tmp/quickstartlinux ]]; then git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; fi")
-        POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' /tmp/quickstartlinux/gnome/restore/etc/sudoers; fi")
-        POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then if ! grep -qFf /tmp/quickstartlinux/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat /tmp/quickstartlinux/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
-        POST_COMMANDS+=("visudo -cf /etc/sudoers")
+        if ensure_quickstartlinux_cloned; then
+            POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${QUICKSTART_DIR}/gnome/restore/etc/sudoers; fi")
+            POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then if ! grep -qFf ${QUICKSTART_DIR}/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat ${QUICKSTART_DIR}/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
+            POST_COMMANDS+=("visudo -cf /etc/sudoers")
+        else
+            echo -e "${RED}Warning: quickstartlinux clone failed. Skipping sudoers restore.${NC}"
+        fi
     fi
 fi
 
@@ -690,12 +718,7 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
 
         if [[ ! -d "$GRUB_THEME_SRC" ]]; then
             echo -e "${YELLOW}Cloning quickstartlinux to enumerate GRUB themes...${NC}"
-            rm -rf /tmp/quickstartlinux
-            if git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; then
-                :
-            else
-                echo -e "${RED}Clone failed — skipping GRUB theme step.${NC}"
-            fi
+            ensure_quickstartlinux_cloned || echo -e "${RED}Clone failed — skipping GRUB theme step.${NC}"
         fi
 
         if [[ -d "$GRUB_THEME_SRC" ]]; then
@@ -715,8 +738,13 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
                     echo "  0) skip"
                     echo
 
-                    read -rp "$(echo -e "${YELLOW}Choose theme [1-${#AVAILABLE_THEMES[@]}, default 1]: ${NC}")" THEME_CHOICE
-                    THEME_CHOICE="${THEME_CHOICE:-1}"
+                    if [[ "$USE_DEFAULTS" == "true" ]]; then
+                        THEME_CHOICE=1
+                        echo -e "${YELLOW}Choose theme [1-${#AVAILABLE_THEMES[@]}, default 1]: ${GREEN}1 (default)${NC}"
+                    else
+                        read -rp "$(echo -e "${YELLOW}Choose theme [1-${#AVAILABLE_THEMES[@]}, default 1]: ${NC}")" THEME_CHOICE
+                        THEME_CHOICE="${THEME_CHOICE:-1}"
+                    fi
 
                     if [[ "$THEME_CHOICE" =~ ^[0-9]+$ ]] \
                        && (( THEME_CHOICE >= 1 && THEME_CHOICE <= ${#AVAILABLE_THEMES[@]} )); then
@@ -726,15 +754,22 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
                         echo
                         echo -e "${YELLOW}Enter the title text for the GRUB menu:${NC}"
                         echo -e "  (empty or spaces = default 'Bootloader')"
-                        read -rp "Title: " GRUB_THEME_TITLE
-                        if [[ -z "${GRUB_THEME_TITLE// /}" ]]; then
+
+                        if [[ "$USE_DEFAULTS" == "true" ]]; then
                             GRUB_THEME_TITLE="Bootloader"
+                            echo -e "${YELLOW}Title: ${GREEN}Bootloader (default)${NC}"
+                        else
+                            read -rp "Title: " GRUB_THEME_TITLE
+                            if [[ -z "${GRUB_THEME_TITLE// /}" ]]; then
+                                GRUB_THEME_TITLE="Bootloader"
+                            fi
                         fi
                         echo -e "${GREEN}Title: ${GRUB_THEME_TITLE}${NC}"
                     else
                         echo -e "${YELLOW}Skipping theme install.${NC}"
                         INSTALL_GRUB_THEME=false
-                    fi                fi
+                    fi
+                fi
             fi
         fi
     fi
@@ -795,7 +830,13 @@ if ask_question "Do you want to install a virtual machine?" "N"; then
     echo -e "${YELLOW}Choose VM type:${NC}"
     echo "  1) VirtualBox"
     echo "  2) GNOME Boxes"
-    read -rp "Enter choice [1/2]: " VM_CHOICE
+
+    if [[ "$USE_DEFAULTS" == "true" ]]; then
+        VM_CHOICE=1
+        echo -e "${YELLOW}Enter choice [1/2]: ${GREEN}1 (default)${NC}"
+    else
+        read -rp "Enter choice [1/2]: " VM_CHOICE
+    fi
 
     case "$VM_CHOICE" in
         1)
@@ -1009,8 +1050,8 @@ fi
 # ============================================================
 # CLEANUP
 # ============================================================
-if [[ -d /tmp/quickstartlinux ]]; then
-    rm -rf /tmp/quickstartlinux
+if [[ -d "$QUICKSTART_DIR" ]]; then
+    rm -rf "$QUICKSTART_DIR"
 fi
 
 echo
