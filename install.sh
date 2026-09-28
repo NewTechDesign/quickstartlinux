@@ -797,19 +797,41 @@ fi
 # ============================================================
 if ask_question "Install all development and utility tools?" "Y"; then
     PACMAN_PACKAGES+=(
-        pacman-contrib
+        # Base tools
+        pacman-contrib htop btop
+
+        # Filesystems
         btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g ntfsprogs
         dosfstools e2fsprogs cryptsetup
+
+        # Forensics / embedded
         binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
+
+        # GVFS / FUSE
         gvfs fuse2 fuse3
+
+        # Crypto / SSL
         openssl nss
+
+        # Android
         android-tools scrcpy
+
+        # Misc
         jhead pixman
-        jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
+
+        # Xorg
+        xorg-xrandr # jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk 
+
+        # Build tools
         git base-devel devtools fakeroot meson ninja pkgconfig glib2 libusb
         systemd-libs gdk-pixbuf2 cairo gcc
+
+        # Containers
         docker docker-compose
     )
+
+    # Enable docker
+    # POST_COMMANDS+=("systemctl enable --now docker")
 fi
 
 # ============================================================
@@ -827,8 +849,10 @@ if ask_question "Install useful applications via Flatpak?" "Y"; then
 
     FLATPAK_PACKAGES+=(
         com.mattjakeman.ExtensionManager
-        org.polymc.PolyMC
         org.chromium.Chromium
+        org.onlyoffice.desktopeditors
+        org.localsend.localsend_app
+        org.polymc.PolyMC
         us.zoom.Zoom
     )
 fi
