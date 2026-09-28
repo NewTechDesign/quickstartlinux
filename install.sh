@@ -636,7 +636,7 @@ fi
 # ============================================================
 # 6. Configure zram (compressed swap in RAM)?
 # ============================================================
-if ask_question "Configure zram (compressed swap in RAM)?" "N"; then
+if ask_question "Configure zram (compressed swap in RAM)?" "Y"; then
     CONFIGURE_ZRAM=true
     PACMAN_PACKAGES+=(zram-generator)
     POST_COMMANDS+=("echo '[zram0]' > /etc/systemd/zram-generator.conf")
@@ -704,7 +704,7 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
             if [[ ${#AVAILABLE_THEMES[@]} -eq 0 ]]; then
                 echo -e "${YELLOW}No themes found in ${GRUB_THEME_SRC} — skipping.${NC}"
             else
-                if ask_question "Install a GRUB theme?" "N"; then
+                if ask_question "Install a GRUB theme?" "Y"; then
                     INSTALL_GRUB_THEME=true
 
                     echo
