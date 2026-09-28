@@ -18,6 +18,7 @@ POST_COMMANDS=()
 INSTALL_FIRMWARE=false
 TUNE_GRUB=false
 FIX_GRUB_MENU=false
+CONFIGURE_ZRAM=false
 
 # GRUB theme
 GRUB_THEME_DIR="/usr/share/grub/themes"
@@ -403,7 +404,6 @@ regenerate_grub_cfg() {
 # ------------------------------------------------------------------
 
 # Helper: list all theme directories under $GRUB_THEME_SRC
-# Echoes directory names (basenames), one per line, sorted.
 list_grub_themes() {
     local src="$1"
     if [[ ! -d "$src" ]]; then
@@ -413,7 +413,6 @@ list_grub_themes() {
 }
 
 # Helper: is any theme currently installed?
-# We consider "installed" if /etc/default/grub has GRUB_THEME= and that path exists.
 is_grub_theme_installed() {
     local theme_line
     theme_line=$(grep -E '^GRUB_THEME=' /etc/default/grub 2>/dev/null || true)
@@ -430,7 +429,6 @@ get_installed_grub_theme() {
 }
 
 # Helper: install a GRUB theme
-# Usage: install_grub_theme "/path/to/theme_dir" "Title text"
 install_grub_theme() {
     local src="$1"
     local title="$2"
@@ -448,32 +446,24 @@ install_grub_theme() {
 
     mkdir -p "$GRUB_THEME_DIR"
 
-    # Remove old copy if present
     if [[ -d "$dst" ]]; then
         rm -rf "$dst"
     fi
     mkdir -p "$dst"
 
-    # Copy everything from the theme dir
     cp -a "$src/." "$dst/"
 
-    # Replace the title in theme.txt
     local theme_txt="${dst}/theme.txt"
     if [[ -f "$theme_txt" ]]; then
-        # Default title
         local new_title="$title"
         if [[ -z "${new_title// /}" ]]; then
             new_title="Bootloader"
         fi
 
-        # Escape for sed
         local esc
         esc=$(printf '%s' "$new_title" | sed -e 's/[\/&]/\\&/g')
 
-        # Replace whatever text="..." is currently on the first label
-        # We target the specific line that has text="Grub Bootloader" or any text="..."
         if grep -qE '^[[:space:]]*text=' "$theme_txt"; then
-            # Replace only the first text= line (the title label)
             awk -v new="$esc" '
                 BEGIN { done=0 }
                 {
@@ -490,10 +480,8 @@ install_grub_theme() {
         fi
     fi
 
-    # Backup grub config
     cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
 
-    # Remove existing GRUB_THEME line, then append ours
     if grep -q '^GRUB_THEME=' /etc/default/grub; then
         sed -i '/^GRUB_THEME=/d' /etc/default/grub
     fi
@@ -614,8 +602,6 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     fi
 fi
 
-# NOTE: cleanup of /tmp/quickstartlinux moved to the very end of the script.
-
 # ============================================================
 # 3. Install emoji & language fonts?
 # ============================================================
@@ -634,11 +620,33 @@ fi
 # 5. Set locale?
 # ============================================================
 if ask_question "Set locale to ru_RU.UTF-8?" "Y"; then
-    POST_COMMANDS+=("localectl set-locale ru_RU.UTF-8")
+    # 1. Uncomment ru_RU.UTF-8 (and en_US.UTF-8 as fallback) in /etc/locale.gen
+    POST_COMMANDS+=("if [[ -f /etc/locale.gen ]]; then sed -i -E 's/^#\\s*(ru_RU\\.UTF-8\\s+UTF-8)/\\1/' /etc/locale.gen; sed -i -E 's/^#\\s*(en_US\\.UTF-8\\s+UTF-8)/\\1/' /etc/locale.gen; fi")
+
+    # 2. Generate locales
+    POST_COMMANDS+=("locale-gen")
+
+    # 3. Set system locale
+    POST_COMMANDS+=("localectl set-locale LANG=ru_RU.UTF-8")
+
+    # 4. (optional) Show result
+    POST_COMMANDS+=("localectl status || true")
 fi
 
 # ============================================================
-# 6. Speed up boot? (auto-detect bootloader)
+# 6. Configure zram (compressed swap in RAM)?
+# ============================================================
+if ask_question "Configure zram (compressed swap in RAM)?" "N"; then
+    CONFIGURE_ZRAM=true
+    PACMAN_PACKAGES+=(zram-generator)
+    POST_COMMANDS+=("echo '[zram0]' > /etc/systemd/zram-generator.conf")
+    POST_COMMANDS+=("systemctl daemon-reload")
+    POST_COMMANDS+=("systemctl start systemd-zram-setup@zram0.service || true")
+    POST_COMMANDS+=("swapon --show || true")
+fi
+
+# ============================================================
+# 7. Speed up boot? (auto-detect bootloader)
 # ============================================================
 BOOTLOADER="$(detect_bootloader)"
 echo -e "${GREEN}Detected bootloader: ${YELLOW}${BOOTLOADER}${NC}"
@@ -661,11 +669,10 @@ case "$BOOTLOADER" in
 esac
 
 # ============================================================
-# 6b. GRUB theme (only for GRUB)
+# 8. GRUB theme (only for GRUB)
 # ============================================================
 if [[ "$BOOTLOADER" == "grub" ]]; then
 
-    # Check if a theme is already installed
     if is_grub_theme_installed; then
         local_installed=$(get_installed_grub_theme)
         echo -e "${YELLOW}A GRUB theme appears to be already installed:${NC}"
@@ -679,10 +686,8 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
         fi
     fi
 
-    # Only offer install if we're not uninstalling
     if [[ "$GRUB_THEME_UNINSTALL" != "true" ]]; then
 
-        # Ensure the repo is available so we can enumerate themes
         if [[ ! -d "$GRUB_THEME_SRC" ]]; then
             echo -e "${YELLOW}Cloning quickstartlinux to enumerate GRUB themes...${NC}"
             rm -rf /tmp/quickstartlinux
@@ -729,15 +734,14 @@ if [[ "$BOOTLOADER" == "grub" ]]; then
                     else
                         echo -e "${YELLOW}Skipping theme install.${NC}"
                         INSTALL_GRUB_THEME=false
-                    fi
-                fi
+                    fi                fi
             fi
         fi
     fi
 fi
 
 # ============================================================
-# 7. Install dev & utility tools?
+# 9. Install dev & utility tools?
 # ============================================================
 if ask_question "Install all development and utility tools?" "Y"; then
     PACMAN_PACKAGES+=(
@@ -757,7 +761,7 @@ if ask_question "Install all development and utility tools?" "Y"; then
 fi
 
 # ============================================================
-# 8. Install useful apps (Flatpak)?
+# 10. Install useful apps (Flatpak)?
 # ============================================================
 INSTALL_FLATPAK=false
 if ask_question "Install useful applications via Flatpak?" "Y"; then
@@ -778,14 +782,14 @@ if ask_question "Install useful applications via Flatpak?" "Y"; then
 fi
 
 # ============================================================
-# 9. Install firmware (auto-detect CPU & GPU)?
+# 11. Install firmware (auto-detect CPU & GPU)?
 # ============================================================
 if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     INSTALL_FIRMWARE=true
 fi
 
 # ============================================================
-# 10. Install a virtual machine?
+# 12. Install a virtual machine?
 # ============================================================
 if ask_question "Do you want to install a virtual machine?" "N"; then
     echo -e "${YELLOW}Choose VM type:${NC}"
@@ -811,7 +815,7 @@ if ask_question "Do you want to install a virtual machine?" "N"; then
 fi
 
 # ============================================================
-# 11. DETECT CPU & GPU
+# 13. DETECT CPU & GPU
 # ============================================================
 if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     echo
@@ -907,6 +911,9 @@ elif [[ "$INSTALL_GRUB_THEME" == "true" && -n "$GRUB_THEME_SELECTED" ]]; then
 fi
 if [[ "$TUNE_GRUB" == "true" || "$FIX_GRUB_MENU" == "true" || "$INSTALL_GRUB_THEME" == "true" || "$GRUB_THEME_UNINSTALL" == "true" ]]; then
     echo -e "${YELLOW}GRUB regeneration:${NC} single run after all GRUB changes"
+fi
+if [[ "$CONFIGURE_ZRAM" == "true" ]]; then
+    echo -e "${YELLOW}zram:${NC} enabled (config: /etc/systemd/zram-generator.conf)"
 fi
 
 echo
