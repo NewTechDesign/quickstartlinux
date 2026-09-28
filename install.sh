@@ -17,6 +17,7 @@ POST_COMMANDS=()
 # Flags
 INSTALL_FIRMWARE=false
 TUNE_GRUB=false
+FIX_GRUB_MENU=false
 
 # Helper: check if a command exists
 command_exists() {
@@ -184,7 +185,8 @@ set_grub_var() {
     fi
 }
 
-# Helper: tune GRUB (remove quiet, set loglevel=3, set custom options, regenerate config)
+# Helper: tune GRUB (/etc/default/grub only, no grub-mkconfig)
+# Regeneration is done centrally by regenerate_grub_cfg()
 tune_grub() {
     local FILE=/etc/default/grub
 
@@ -237,7 +239,6 @@ tune_grub() {
     sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${new}\"|" "$FILE"
 
     # --- write custom GRUB options ---
-    # Each of these: add if missing, uncomment if commented, set to the exact value.
     set_grub_var "GRUB_DISABLE_BOOTNEXT"      "true"
     set_grub_var "GRUB_DISABLE_UEFI_FIRMWARE" "false"
     set_grub_var "GRUB_DISABLE_SUBMENU"       "y"
@@ -272,27 +273,8 @@ tune_grub() {
     echo "Custom GRUB options:"
     grep -E '^(GRUB_DISABLE_BOOTNEXT|GRUB_DISABLE_UEFI_FIRMWARE|GRUB_DISABLE_SUBMENU|GRUB_DISABLE_OS_PROBER|GRUB_GFXMODE|GRUB_TIMEOUT_STYLE)=' "$FILE" || true
 
-    # --- regenerate grub config only on success ---
-    if [[ "$DONE" -eq 1 ]]; then
-        echo
-        echo -e "${GREEN}>>> Regenerating GRUB configuration...${NC}"
-
-        local GRUB_CFG
-        GRUB_CFG="$(find /boot -name grub.cfg -print -quit 2>/dev/null || true)"
-
-        if [[ -z "$GRUB_CFG" ]]; then
-            echo -e "${RED}Could not find grub.cfg under /boot — skipping grub-mkconfig${NC}" >&2
-            return 1
-        fi
-
-        if grub-mkconfig -o "$GRUB_CFG"; then
-            echo -e "${GREEN}GRUB configuration regenerated: $GRUB_CFG${NC}"
-        else
-            echo -e "${RED}grub-mkconfig failed${NC}" >&2
-            return 1
-        fi
-    else
-        echo -e "${RED}Skipping grub-mkconfig due to failed verification${NC}" >&2
+    if [[ "$DONE" -ne 1 ]]; then
+        echo -e "${RED}GRUB tuning failed — skipping regeneration${NC}" >&2
         return 1
     fi
 
@@ -300,6 +282,156 @@ tune_grub() {
     DONE=1
     trap - INT TERM EXIT
     cleanup_grub
+    return 0
+}
+
+# Helper: fix GRUB menu to look like:
+#   Arch Linux
+#   Windows (on /dev/sdXN)
+#
+# Does:
+#   1. Backs up original 10_linux and 30_os-prober
+#   2. Patches 10_linux: removes advanced entry, keeps simple
+#   3. Patches 30_os-prober: Windows Boot Manager -> Windows
+#   4. Disables 31_efi_bootnext and 30_uefi-firmware
+#   5. (no grub-mkconfig here — done centrally)
+#   6. Sets chattr +i on patched files
+fix_grub_menu() {
+    local GRUB_D=/etc/grub.d
+    local BACKUP=/tmp/grub-backup
+    mkdir -p "$BACKUP"
+    local ts
+    ts=$(date +%Y%m%d-%H%M%S)
+
+    # --- Step 1. Remove immutable attribute (if set) ---
+    echo -e "${GREEN}==> Step 1. Removing immutable attribute${NC}"
+    for f in "$GRUB_D/10_linux" "$GRUB_D/30_os-prober" \
+             "$GRUB_D/31_efi_bootnext" "$GRUB_D/30_uefi-firmware"; do
+        if [ -e "$f" ]; then
+            chattr -i "$f" 2>/dev/null
+        fi
+    done
+
+    # --- Step 2. Backup working scripts ---
+    echo -e "${GREEN}==> Step 2. Backing up working scripts${NC}"
+    if [ -f "$GRUB_D/10_linux" ]; then
+        cp -a "$GRUB_D/10_linux" "$BACKUP/10_linux.$ts"
+        echo "    backup: $BACKUP/10_linux.$ts"
+    fi
+    if [ -f "$GRUB_D/30_os-prober" ]; then
+        cp -a "$GRUB_D/30_os-prober" "$BACKUP/30_os-prober.$ts"
+        echo "    backup: $BACKUP/30_os-prober.$ts"
+    fi
+
+    # --- Step 3. Patch 10_linux ---
+    echo -e "${GREEN}==> Step 3. Patching 10_linux${NC}"
+    if [ -f "$GRUB_D/10_linux" ]; then
+        if grep -q '^  linux_entry "${OS}" "${version}" advanced' "$GRUB_D/10_linux"; then
+            awk '
+                BEGIN { skip=0 }
+                /^  if \[ "x\$is_top_level" = xtrue \] && \[ "x\$\{GRUB_DISABLE_SUBMENU\}" != xtrue \]; then$/ {
+                    skip=1
+                    print "  linux_entry \"${OS}\" \"${version}\" simple \\"
+                    print "              \"${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}\""
+                    next
+                }
+                skip==1 && /^              "\$\{GRUB_CMDLINE_LINUX\} \$\{GRUB_CMDLINE_LINUX_DEFAULT\}"$/ {
+                    skip=0
+                    next
+                }
+                skip==1 { next }
+                { print }
+            ' "$GRUB_D/10_linux" > "$GRUB_D/10_linux.new"
+
+            if grep -q '^  linux_entry "${OS}" "${version}" simple' "$GRUB_D/10_linux.new" \
+               && ! grep -q '^  linux_entry "${OS}" "${version}" advanced' "$GRUB_D/10_linux.new"; then
+                mv "$GRUB_D/10_linux.new" "$GRUB_D/10_linux"
+                chmod +x "$GRUB_D/10_linux"
+                echo "    ok: advanced removed, simple kept"
+            else
+                rm -f "$GRUB_D/10_linux.new"
+                echo -e "${YELLOW}    SKIP: could not replace block, file untouched${NC}"
+            fi
+        else
+            echo "    ok: 10_linux already patched, skipping"
+        fi
+    else
+        echo -e "${YELLOW}    SKIP: 10_linux not found${NC}"
+    fi
+
+    # --- Step 4. Patch 30_os-prober: Windows Boot Manager -> Windows ---
+    echo -e "${GREEN}==> Step 4. Patching 30_os-prober${NC}"
+    if [ -f "$GRUB_D/30_os-prober" ]; then
+        if grep -q 'LONGNAME="Windows"' "$GRUB_D/30_os-prober"; then
+            echo "    ok: already patched, skipping"
+        else
+            local LINE
+            LINE=$(grep -n '^  LONGNAME="`echo ${OS} | cut -d' "$GRUB_D/30_os-prober" | head -n1 | cut -d: -f1)
+            if [ -z "$LINE" ]; then
+                echo -e "${YELLOW}    SKIP: LONGNAME=... line not found, file untouched${NC}"
+            else
+                echo "    found LONGNAME=... on line $LINE"
+                head -n "$LINE" "$GRUB_D/30_os-prober" > "$GRUB_D/30_os-prober.new"
+                cat >> "$GRUB_D/30_os-prober.new" <<'EOF'
+  case "$LONGNAME" in
+    *"Windows Boot Manager"*) LONGNAME="Windows" ;;
+  esac
+EOF
+                tail -n +$((LINE+1)) "$GRUB_D/30_os-prober" >> "$GRUB_D/30_os-prober.new"
+
+                if grep -q 'LONGNAME="Windows"' "$GRUB_D/30_os-prober.new"; then
+                    mv "$GRUB_D/30_os-prober.new" "$GRUB_D/30_os-prober"
+                    chmod +x "$GRUB_D/30_os-prober"
+                    echo "    ok: Windows renamed"
+                else
+                    rm -f "$GRUB_D/30_os-prober.new"
+                    echo -e "${YELLOW}    SKIP: insertion failed, file untouched${NC}"
+                fi
+            fi
+        fi
+    else
+        echo -e "${YELLOW}    SKIP: 30_os-prober not found${NC}"
+    fi
+
+    # --- Step 5. Syntax check ---
+    echo -e "${GREEN}==> Step 5. Syntax check (sh -n)${NC}"
+    [ -f "$GRUB_D/10_linux" ]     && sh -n "$GRUB_D/10_linux"     && echo "    10_linux: ok"
+    [ -f "$GRUB_D/30_os-prober" ] && sh -n "$GRUB_D/30_os-prober" && echo "    30_os-prober: ok"
+
+    # --- Step 6. Set immutable attribute ---
+    echo -e "${GREEN}==> Step 6. Setting immutable attribute${NC}"
+    [ -f "$GRUB_D/10_linux" ]     && chattr +i "$GRUB_D/10_linux"     && echo "    ok: 10_linux protected (chattr +i)"
+    [ -f "$GRUB_D/30_os-prober" ] && chattr +i "$GRUB_D/30_os-prober" && echo "    ok: 30_os-prober protected (chattr +i)"
+
+    echo
+    echo -e "${GREEN}==> Files patched:${NC}"
+    echo "    10_linux, 30_os-prober"
+    echo "    Backups in: $BACKUP"
+    echo "    (grub.cfg will be regenerated once, later)"
+    return 0
+}
+
+# Helper: regenerate grub.cfg exactly once (called after all GRUB changes)
+regenerate_grub_cfg() {
+    local GRUB_CFG
+    GRUB_CFG="$(find /boot -name grub.cfg -print -quit 2>/dev/null || true)"
+    if [[ -z "$GRUB_CFG" ]]; then
+        GRUB_CFG=/boot/grub/grub.cfg
+    fi
+
+    echo
+    echo -e "${GREEN}>>> Regenerating GRUB configuration (single run)...${NC}"
+
+    if grub-mkconfig -o "$GRUB_CFG"; then
+        echo -e "${GREEN}GRUB configuration regenerated: $GRUB_CFG${NC}"
+    else
+        echo -e "${RED}grub-mkconfig failed${NC}" >&2
+        return 1
+    fi
+
+    echo
+    echo -e "${GREEN}==> Menu entries:${NC}"
+    grep -n '^menuentry\|^submenu' "$GRUB_CFG" || true
     return 0
 }
 
@@ -339,7 +471,6 @@ if ask_question "Are you using GNOME?" "Y"; then
     USE_GNOME=true
     PACMAN_PACKAGES+=(adw-gtk-theme gnome-tweaks gnome-sound-recorder)
 
-    # Detect the active user once and reuse it
     detect_active_user
 
     if [[ -n "$ACTIVE_UID" ]]; then
@@ -355,7 +486,6 @@ fi
 if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
     if ask_question "Restore GNOME settings from quickstartlinux?" "Y"; then
 
-        # Reuse the detected user, or detect if not set yet
         if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
             detect_active_user
         fi
@@ -365,23 +495,11 @@ if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
         else
             echo -e "${GREEN}Restoring GNOME settings for user: ${ACTIVE_USER} (UID ${ACTIVE_UID})${NC}"
 
-            # 1. Clone repo
             POST_COMMANDS+=("rm -rf /tmp/quickstartlinux && git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux")
-
-            # 2. Apply dconf settings as the active user (with DBus session)
             POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < /tmp/quickstartlinux/gnome/restore/dconf-settings.ini'")
-
-            # 3. Copy gtk-3.0 into user's ~/.config
             POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a /tmp/quickstartlinux/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
-
-            # 3b. Replace USER placeholder in gtk-3.0/bookmarks with the actual username
             POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
-
-            # 4. Copy .local into user's home
             POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
-
-            # NOTE: Cleanup is intentionally moved to section 2d, so that
-            # the sudoers restore (2c) can reuse the same cloned repo.
         fi
     fi
 fi
@@ -393,7 +511,6 @@ RESTORE_SUDOERS=false
 if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     RESTORE_SUDOERS=true
 
-    # Reuse the detected user, or detect if not set yet
     if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
         detect_active_user
     fi
@@ -401,17 +518,9 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     if [[ -z "$ACTIVE_USER" ]]; then
         echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
     else
-        # 1. Clone repo (if not already cloned by section 2b)
         POST_COMMANDS+=("if [[ ! -d /tmp/quickstartlinux ]]; then git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; fi")
-
-        # 2. Replace USER placeholder with the actual username in the repo's sudoers file
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' /tmp/quickstartlinux/gnome/restore/etc/sudoers; fi")
-
-        # 3. Append sudoers content from the repo to /etc/sudoers,
-        #    but only if it is not already present (avoid duplicates).
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then if ! grep -qFf /tmp/quickstartlinux/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat /tmp/quickstartlinux/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
-
-        # 4. Validate sudoers syntax
         POST_COMMANDS+=("visudo -cf /etc/sudoers")
     fi
 fi
@@ -461,6 +570,9 @@ case "$BOOTLOADER" in
         if ask_question "Tune GRUB (remove 'quiet', set loglevel=3, apply custom GRUB options)?" "Y"; then
             TUNE_GRUB=true
         fi
+        if ask_question "Fix GRUB menu to look like 'Arch Linux' / 'Windows' (patch 10_linux and 30_os-prober)?" "Y"; then
+            FIX_GRUB_MENU=true
+        fi
         ;;
 esac
 
@@ -469,41 +581,19 @@ esac
 # ============================================================
 if ask_question "Install all development and utility tools?" "Y"; then
     PACMAN_PACKAGES+=(
-        # Base tools
         pacman-contrib
-
-        # Filesystems
         btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g ntfsprogs
         dosfstools e2fsprogs cryptsetup
-
-        # Forensics / embedded
         binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
-
-        # GVFS / FUSE
         gvfs fuse2 fuse3
-
-        # Crypto / SSL
         openssl nss
-
-        # Android
         android-tools scrcpy
-
-        # Misc
         jhead pixman
-
-        # Java / Xorg
         jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
-
-        # Build tools
         git base-devel devtools fakeroot meson ninja pkgconfig glib2 libusb
         systemd-libs gdk-pixbuf2 cairo gcc
-
-        # Containers
         docker docker-compose
     )
-
-    # Enable docker
-    # POST_COMMANDS+=("systemctl enable --now docker")
 fi
 
 # ============================================================
@@ -513,12 +603,10 @@ INSTALL_FLATPAK=false
 if ask_question "Install useful applications via Flatpak?" "Y"; then
     INSTALL_FLATPAK=true
 
-    # Ensure flatpak is available
     if ! command_exists flatpak; then
         PACMAN_PACKAGES+=(flatpak)
     fi
 
-    # Add flathub remote
     POST_COMMANDS+=("flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo")
 
     FLATPAK_PACKAGES+=(
@@ -531,7 +619,6 @@ fi
 
 # ============================================================
 # 9. Install firmware (auto-detect CPU & GPU)?
-#    Only ask the question here; detection happens later.
 # ============================================================
 if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     INSTALL_FIRMWARE=true
@@ -570,7 +657,6 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     echo
     echo -e "${GREEN}>>> Detecting CPU and GPU...${NC}"
 
-    # Base audio/video/bluetooth firmware
     PACMAN_PACKAGES+=(
         pipewire pipewire-alsa pipewire-pulse wireplumber alsa-utils
         sof-firmware alsa-ucm-conf v4l-utils bluez bluez-utils pciutils
@@ -579,38 +665,24 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     CPU_VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo | awk '{print $3}')
     GPU_INFO=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 
-    # Intel CPU
     if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
         echo -e "${GREEN}Intel CPU detected. Adding Intel packages...${NC}"
-        PACMAN_PACKAGES+=(
-            mesa mesa-utils libva-intel-driver intel-media-driver
-            vulkan-intel
-        )
+        PACMAN_PACKAGES+=(mesa mesa-utils libva-intel-driver intel-media-driver vulkan-intel)
     fi
 
-    # AMD CPU
     if [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
         echo -e "${GREEN}AMD CPU detected. Adding AMD packages...${NC}"
-        PACMAN_PACKAGES+=(
-            mesa mesa-utils vulkan-radeon libva-mesa-driver
-        )
+        PACMAN_PACKAGES+=(mesa mesa-utils vulkan-radeon libva-mesa-driver)
     fi
 
-    # NVIDIA GPU
     if echo "$GPU_INFO" | grep -qi nvidia; then
         echo -e "${GREEN}NVIDIA GPU detected. Adding NVIDIA packages...${NC}"
-        PACMAN_PACKAGES+=(
-            nvidia nvidia-utils nvidia-settings
-            vulkan-icd-loader libvdpau opencl-nvidia
-        )
+        PACMAN_PACKAGES+=(nvidia nvidia-utils nvidia-settings vulkan-icd-loader libvdpau opencl-nvidia)
     fi
 
-    # AMD GPU
     if echo "$GPU_INFO" | grep -qiE 'amd|ati|radeon'; then
         echo -e "${GREEN}AMD GPU detected. Adding AMD GPU packages...${NC}"
-        PACMAN_PACKAGES+=(
-            mesa mesa-utils vulkan-radeon libva-mesa-driver
-        )
+        PACMAN_PACKAGES+=(mesa mesa-utils vulkan-radeon libva-mesa-driver)
     fi
 fi
 
@@ -646,14 +718,19 @@ fi
 echo
 echo -e "${YELLOW}Bootloader detected:${NC} ${BOOTLOADER}"
 if [[ "$TUNE_GRUB" == "true" ]]; then
-    echo -e "${YELLOW}GRUB tuning:${NC} enabled (will run grub-mkconfig after install)"
-    echo -e "${YELLOW}Custom GRUB options to be applied:${NC}"
+    echo -e "${YELLOW}GRUB tuning:${NC} enabled"
     echo "  GRUB_DISABLE_BOOTNEXT=true"
     echo "  GRUB_DISABLE_UEFI_FIRMWARE=false"
     echo "  GRUB_DISABLE_SUBMENU=y"
     echo "  GRUB_DISABLE_OS_PROBER=false"
     echo "  GRUB_GFXMODE=auto"
     echo "  GRUB_TIMEOUT_STYLE=menu"
+fi
+if [[ "$FIX_GRUB_MENU" == "true" ]]; then
+    echo -e "${YELLOW}GRUB menu fix:${NC} enabled (Arch Linux / Windows)"
+fi
+if [[ "$TUNE_GRUB" == "true" || "$FIX_GRUB_MENU" == "true" ]]; then
+    echo -e "${YELLOW}GRUB regeneration:${NC} single run after all GRUB changes"
 fi
 
 echo
@@ -670,18 +747,42 @@ fi
 if [[ ${#PACMAN_PACKAGES[@]} -gt 0 ]]; then
     echo
     echo -e "${GREEN}>>> Installing pacman packages...${NC}"
-    # Deduplicate
     UNIQUE_PACMAN=($(printf '%s\n' "${PACMAN_PACKAGES[@]}" | awk '!seen[$0]++'))
     pacman -S --noconfirm --needed "${UNIQUE_PACMAN[@]}"
 fi
 
 # ============================================================
-# TUNE GRUB (after packages are installed)
+# TUNE GRUB (only edits /etc/default/grub)
 # ============================================================
+GRUB_CHANGED=false
 if [[ "$TUNE_GRUB" == "true" ]]; then
     echo
     echo -e "${GREEN}>>> Tuning GRUB...${NC}"
-    tune_grub || echo -e "${RED}Warning: GRUB tuning failed.${NC}"
+    if tune_grub; then
+        GRUB_CHANGED=true
+    else
+        echo -e "${RED}Warning: GRUB tuning failed.${NC}"
+    fi
+fi
+
+# ============================================================
+# FIX GRUB MENU (only patches /etc/grub.d/*)
+# ============================================================
+if [[ "$FIX_GRUB_MENU" == "true" ]]; then
+    echo
+    echo -e "${GREEN}>>> Fixing GRUB menu (Arch Linux / Windows)...${NC}"
+    if fix_grub_menu; then
+        GRUB_CHANGED=true
+    else
+        echo -e "${RED}Warning: GRUB menu fix failed.${NC}"
+    fi
+fi
+
+# ============================================================
+# REGENERATE GRUB CONFIG (exactly once)
+# ============================================================
+if [[ "$GRUB_CHANGED" == "true" ]]; then
+    regenerate_grub_cfg || echo -e "${RED}Warning: grub-mkconfig failed.${NC}"
 fi
 
 # ============================================================
