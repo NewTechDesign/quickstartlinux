@@ -19,6 +19,14 @@ INSTALL_FIRMWARE=false
 TUNE_GRUB=false
 FIX_GRUB_MENU=false
 
+# GRUB theme
+GRUB_THEME_DIR="/usr/share/grub/themes"
+GRUB_THEME_SRC="/tmp/quickstartlinux/grub/themes"
+INSTALL_GRUB_THEME=false
+GRUB_THEME_SELECTED=""
+GRUB_THEME_TITLE=""
+GRUB_THEME_UNINSTALL=false
+
 # Helper: check if a command exists
 command_exists() {
     command -v "$1" &>/dev/null
@@ -35,12 +43,10 @@ ensure_root() {
     local script_path
     script_path="$(readlink -f "$0")"
 
-    # Try pkexec (graphical prompt) first
     if command_exists pkexec; then
         exec pkexec sh "$script_path" "$@"
     fi
 
-    # Fallback to sudo (terminal prompt)
     if command_exists sudo; then
         exec sudo sh "$script_path" "$@"
     fi
@@ -50,13 +56,11 @@ ensure_root() {
 }
 
 # Helper: ask a yes/no question
-# Usage: ask_question "Question text?" "default (Y or N)"
 ask_question() {
     local prompt="$1"
     local default="$2"
     local answer
 
-    # If default mode is active, return the default answer
     if [[ "$USE_DEFAULTS" == "true" ]]; then
         if [[ "$default" == "Y" ]]; then
             echo -e "${YELLOW}${prompt} [Y/n]: ${GREEN}Y (default)${NC}"
@@ -84,13 +88,11 @@ is_installed() {
 }
 
 # Helper: detect the active graphical user (name, UID, home)
-# Sets: ACTIVE_USER, ACTIVE_UID, ACTIVE_HOME
 detect_active_user() {
     ACTIVE_USER=""
     ACTIVE_UID=""
     ACTIVE_HOME=""
 
-    # Try loginctl first
     if command_exists loginctl; then
         local session_id
         session_id=$(loginctl list-sessions --no-legend 2>/dev/null \
@@ -109,7 +111,6 @@ detect_active_user() {
         fi
     fi
 
-    # Fallback: who
     if [[ -z "$ACTIVE_USER" ]]; then
         ACTIVE_USER=$(who | awk '{print $1}' | head -n1)
         if [[ -n "$ACTIVE_USER" ]]; then
@@ -117,7 +118,6 @@ detect_active_user() {
         fi
     fi
 
-    # Resolve home directory
     if [[ -n "$ACTIVE_USER" ]]; then
         ACTIVE_HOME=$(getent passwd "$ACTIVE_USER" | cut -d: -f6)
         if [[ -z "$ACTIVE_HOME" ]]; then
@@ -127,9 +127,7 @@ detect_active_user() {
 }
 
 # Helper: detect the bootloader in use
-# Echoes one of: grub, systemd-boot, unknown
 detect_bootloader() {
-    # GRUB: /etc/default/grub exists and/or grub.cfg present under /boot
     if [[ -f /etc/default/grub ]]; then
         echo "grub"
         return 0
@@ -138,28 +136,20 @@ detect_bootloader() {
         echo "grub"
         return 0
     fi
-
-    # systemd-boot: /boot/loader/loader.conf exists
     if [[ -f /boot/loader/loader.conf ]]; then
         echo "systemd-boot"
         return 0
     fi
-
-    # Fallback: check EFI entries
     if command_exists bootctl; then
         if bootctl status 2>/dev/null | grep -qi 'systemd-boot'; then
             echo "systemd-boot"
             return 0
         fi
     fi
-
     echo "unknown"
 }
 
 # Helper: set or update a GRUB variable in /etc/default/grub
-# Usage: set_grub_var "VAR_NAME" "value"
-# - If VAR=... exists (commented or not) -> replace the line
-# - If VAR is not present at all -> append it
 set_grub_var() {
     local var="$1"
     local value="$2"
@@ -170,23 +160,19 @@ set_grub_var() {
         return 1
     fi
 
-    # Escape value for use in sed replacement (handles /, &, \)
     local esc_value
     esc_value=$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')
 
     if grep -qE "^[[:space:]]*#?[[:space:]]*${var}=" "$file"; then
-        # Replace existing (possibly commented) line
         sed -i -E "s|^[[:space:]]*#?[[:space:]]*${var}=.*|${var}=${esc_value}|" "$file"
         echo -e "${GREEN}Updated: ${var}=${value}${NC}"
     else
-        # Append new line
         printf '%s=%s\n' "$var" "$value" >> "$file"
         echo -e "${GREEN}Added:   ${var}=${value}${NC}"
     fi
 }
 
 # Helper: tune GRUB (/etc/default/grub only, no grub-mkconfig)
-# Regeneration is done centrally by regenerate_grub_cfg()
 tune_grub() {
     local FILE=/etc/default/grub
 
@@ -208,7 +194,6 @@ tune_grub() {
     fi
     echo -e "${GREEN}Backup: $BAK${NC}"
 
-    # --- rollback / cleanup ---
     local DONE=0
     cleanup_grub() {
         if [[ "$DONE" -ne 1 && -f "$BAK" ]]; then
@@ -220,12 +205,10 @@ tune_grub() {
     }
     trap cleanup_grub INT TERM EXIT
 
-    # --- current value of GRUB_CMDLINE_LINUX_DEFAULT ---
     local current
     current=$(sed -nE 's/^GRUB_CMDLINE_LINUX_DEFAULT="(.*)"$/\1/p' "$FILE" | head -n1)
     current="${current:-}"
 
-    # --- new value for GRUB_CMDLINE_LINUX_DEFAULT ---
     local new
     new=$(printf '%s\n' "$current" \
         | tr ' ' '\n' \
@@ -235,11 +218,8 @@ tune_grub() {
     new="${new}loglevel=3"
     new="${new% }"
 
-    # --- write GRUB_CMDLINE_LINUX_DEFAULT ---
     sed -i -E "s|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT=\"${new}\"|" "$FILE"
 
-    # --- write custom GRUB options ---
-    # Each of these: add if missing, uncomment if commented, set to the exact value.
     set_grub_var "GRUB_DISABLE_BOOTNEXT"      "true"
     set_grub_var "GRUB_DISABLE_UEFI_FIRMWARE" "false"
     set_grub_var "GRUB_DISABLE_SUBMENU"       "y"
@@ -247,7 +227,6 @@ tune_grub() {
     set_grub_var "GRUB_GFXMODE"               "auto"
     set_grub_var "GRUB_TIMEOUT_STYLE"         "menu"
 
-    # --- verify ---
     if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT="' "$FILE" \
        && grep -qE '^GRUB_CMDLINE_LINUX_DEFAULT="[^"]*"$' "$FILE" \
        && grep -q 'loglevel=3' "$FILE" \
@@ -279,24 +258,13 @@ tune_grub() {
         return 1
     fi
 
-    # success — disable rollback
     DONE=1
     trap - INT TERM EXIT
     cleanup_grub
     return 0
 }
 
-# Helper: fix GRUB menu to look like:
-#   Arch Linux
-#   Windows (on /dev/sdXN)
-#
-# Does:
-#   1. Backs up original 10_linux and 30_os-prober
-#   2. Patches 10_linux: removes advanced entry, keeps simple
-#   3. Patches 30_os-prober: Windows Boot Manager -> Windows
-#   4. Disables 31_efi_bootnext and 30_uefi-firmware
-#   5. (no grub-mkconfig here — done centrally)
-#   6. Sets chattr +i on patched files
+# Helper: fix GRUB menu to look like 'Arch Linux' / 'Windows'
 fix_grub_menu() {
     local GRUB_D=/etc/grub.d
     local BACKUP=/tmp/grub-backup
@@ -304,7 +272,6 @@ fix_grub_menu() {
     local ts
     ts=$(date +%Y%m%d-%H%M%S)
 
-    # --- Step 1. Remove immutable attribute (if set) ---
     echo -e "${GREEN}==> Step 1. Removing immutable attribute${NC}"
     for f in "$GRUB_D/10_linux" "$GRUB_D/30_os-prober" \
              "$GRUB_D/31_efi_bootnext" "$GRUB_D/30_uefi-firmware"; do
@@ -313,7 +280,6 @@ fix_grub_menu() {
         fi
     done
 
-    # --- Step 2. Backup working scripts ---
     echo -e "${GREEN}==> Step 2. Backing up working scripts${NC}"
     if [ -f "$GRUB_D/10_linux" ]; then
         cp -a "$GRUB_D/10_linux" "$BACKUP/10_linux.$ts"
@@ -324,7 +290,6 @@ fix_grub_menu() {
         echo "    backup: $BACKUP/30_os-prober.$ts"
     fi
 
-    # --- Step 3. Patch 10_linux ---
     echo -e "${GREEN}==> Step 3. Patching 10_linux${NC}"
     if [ -f "$GRUB_D/10_linux" ]; then
         if grep -q '^  linux_entry "${OS}" "${version}" advanced' "$GRUB_D/10_linux"; then
@@ -360,7 +325,6 @@ fix_grub_menu() {
         echo -e "${YELLOW}    SKIP: 10_linux not found${NC}"
     fi
 
-    # --- Step 4. Patch 30_os-prober: Windows Boot Manager -> Windows ---
     echo -e "${GREEN}==> Step 4. Patching 30_os-prober${NC}"
     if [ -f "$GRUB_D/30_os-prober" ]; then
         if grep -q 'LONGNAME="Windows"' "$GRUB_D/30_os-prober"; then
@@ -394,12 +358,10 @@ EOF
         echo -e "${YELLOW}    SKIP: 30_os-prober not found${NC}"
     fi
 
-    # --- Step 5. Syntax check ---
     echo -e "${GREEN}==> Step 5. Syntax check (sh -n)${NC}"
     [ -f "$GRUB_D/10_linux" ]     && sh -n "$GRUB_D/10_linux"     && echo "    10_linux: ok"
     [ -f "$GRUB_D/30_os-prober" ] && sh -n "$GRUB_D/30_os-prober" && echo "    30_os-prober: ok"
 
-    # --- Step 6. Set immutable attribute ---
     echo -e "${GREEN}==> Step 6. Setting immutable attribute${NC}"
     [ -f "$GRUB_D/10_linux" ]     && chattr +i "$GRUB_D/10_linux"     && echo "    ok: 10_linux protected (chattr +i)"
     [ -f "$GRUB_D/30_os-prober" ] && chattr +i "$GRUB_D/30_os-prober" && echo "    ok: 30_os-prober protected (chattr +i)"
@@ -412,7 +374,7 @@ EOF
     return 0
 }
 
-# Helper: regenerate grub.cfg exactly once (called after all GRUB changes)
+# Helper: regenerate grub.cfg exactly once
 regenerate_grub_cfg() {
     local GRUB_CFG
     GRUB_CFG="$(find /boot -name grub.cfg -print -quit 2>/dev/null || true)"
@@ -436,6 +398,132 @@ regenerate_grub_cfg() {
     return 0
 }
 
+# ------------------------------------------------------------------
+# GRUB theme helpers
+# ------------------------------------------------------------------
+
+# Helper: list all theme directories under $GRUB_THEME_SRC
+# Echoes directory names (basenames), one per line, sorted.
+list_grub_themes() {
+    local src="$1"
+    if [[ ! -d "$src" ]]; then
+        return 1
+    fi
+    find "$src" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort
+}
+
+# Helper: is any theme currently installed?
+# We consider "installed" if /etc/default/grub has GRUB_THEME= and that path exists.
+is_grub_theme_installed() {
+    local theme_line
+    theme_line=$(grep -E '^GRUB_THEME=' /etc/default/grub 2>/dev/null || true)
+    [[ -n "$theme_line" ]]
+}
+
+# Helper: get currently installed theme directory (or empty)
+get_installed_grub_theme() {
+    local theme_path
+    theme_path=$(sed -nE 's/^GRUB_THEME="?([^"]+)"?$/\1/p' /etc/default/grub 2>/dev/null | head -n1)
+    if [[ -n "$theme_path" && -f "$theme_path" ]]; then
+        dirname "$theme_path"
+    fi
+}
+
+# Helper: install a GRUB theme
+# Usage: install_grub_theme "/path/to/theme_dir" "Title text"
+install_grub_theme() {
+    local src="$1"
+    local title="$2"
+
+    if [[ ! -d "$src" ]]; then
+        echo -e "${RED}Theme source not found: $src${NC}" >&2
+        return 1
+    fi
+
+    local theme_name
+    theme_name=$(basename "$src")
+    local dst="${GRUB_THEME_DIR}/${theme_name}"
+
+    echo -e "${GREEN}>>> Installing GRUB theme: ${theme_name}${NC}"
+
+    mkdir -p "$GRUB_THEME_DIR"
+
+    # Remove old copy if present
+    if [[ -d "$dst" ]]; then
+        rm -rf "$dst"
+    fi
+    mkdir -p "$dst"
+
+    # Copy everything from the theme dir
+    cp -a "$src/." "$dst/"
+
+    # Replace the title in theme.txt
+    local theme_txt="${dst}/theme.txt"
+    if [[ -f "$theme_txt" ]]; then
+        # Default title
+        local new_title="$title"
+        if [[ -z "${new_title// /}" ]]; then
+            new_title="Bootloader"
+        fi
+
+        # Escape for sed
+        local esc
+        esc=$(printf '%s' "$new_title" | sed -e 's/[\/&]/\\&/g')
+
+        # Replace whatever text="..." is currently on the first label
+        # We target the specific line that has text="Grub Bootloader" or any text="..."
+        if grep -qE '^[[:space:]]*text=' "$theme_txt"; then
+            # Replace only the first text= line (the title label)
+            awk -v new="$esc" '
+                BEGIN { done=0 }
+                {
+                    if (!done && $0 ~ /^[[:space:]]*text=/) {
+                        sub(/text=.*/, "text=\"" new "\"")
+                        done=1
+                    }
+                    print
+                }
+            ' "$theme_txt" > "${theme_txt}.new" && mv "${theme_txt}.new" "$theme_txt"
+            echo -e "${GREEN}    theme.txt: title set to '${new_title}'${NC}"
+        else
+            echo -e "${YELLOW}    theme.txt: no text= line found, skipping title change${NC}"
+        fi
+    fi
+
+    # Backup grub config
+    cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
+
+    # Remove existing GRUB_THEME line, then append ours
+    if grep -q '^GRUB_THEME=' /etc/default/grub; then
+        sed -i '/^GRUB_THEME=/d' /etc/default/grub
+    fi
+    echo "GRUB_THEME=\"${dst}/theme.txt\"" >> /etc/default/grub
+
+    echo -e "${GREEN}    GRUB_THEME set to ${dst}/theme.txt${NC}"
+    return 0
+}
+
+# Helper: uninstall the current GRUB theme
+uninstall_grub_theme() {
+    echo -e "${GREEN}>>> Uninstalling GRUB theme...${NC}"
+
+    local installed_dir
+    installed_dir=$(get_installed_grub_theme)
+
+    if [[ -n "$installed_dir" && -d "$installed_dir" ]]; then
+        rm -rf "$installed_dir"
+        echo -e "${GREEN}    removed: ${installed_dir}${NC}"
+    else
+        echo -e "${YELLOW}    no installed theme directory found, skipping removal${NC}"
+    fi
+
+    cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
+    sed -i '/^GRUB_THEME=/d' /etc/default/grub
+    echo -e "${GREEN}    GRUB_THEME removed from /etc/default/grub${NC}"
+    return 0
+}
+
+# ============================================================
 echo -e "${GREEN}=== Arch Linux Setup Script ===${NC}"
 echo
 
@@ -472,7 +560,6 @@ if ask_question "Are you using GNOME?" "Y"; then
     USE_GNOME=true
     PACMAN_PACKAGES+=(adw-gtk-theme gnome-tweaks gnome-sound-recorder)
 
-    # Detect the active user once and reuse it
     detect_active_user
 
     if [[ -n "$ACTIVE_UID" ]]; then
@@ -488,7 +575,6 @@ fi
 if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
     if ask_question "Restore GNOME settings from quickstartlinux?" "Y"; then
 
-        # Reuse the detected user, or detect if not set yet
         if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
             detect_active_user
         fi
@@ -498,23 +584,11 @@ if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" ]]; then
         else
             echo -e "${GREEN}Restoring GNOME settings for user: ${ACTIVE_USER} (UID ${ACTIVE_UID})${NC}"
 
-            # 1. Clone repo
             POST_COMMANDS+=("rm -rf /tmp/quickstartlinux && git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux")
-
-            # 2. Apply dconf settings as the active user (with DBus session)
             POST_COMMANDS+=("su - ${ACTIVE_USER} -c 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${ACTIVE_UID}/bus dconf load / < /tmp/quickstartlinux/gnome/restore/dconf-settings.ini'")
-
-            # 3. Copy gtk-3.0 into user's ~/.config
             POST_COMMANDS+=("mkdir -p ${ACTIVE_HOME}/.config && cp -a /tmp/quickstartlinux/gnome/restore/.config/gtk-3.0 ${ACTIVE_HOME}/.config/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.config/gtk-3.0")
-
-            # 3b. Replace USER placeholder in gtk-3.0/bookmarks with the actual username
             POST_COMMANDS+=("if [[ -f ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${ACTIVE_HOME}/.config/gtk-3.0/bookmarks; fi")
-
-            # 4. Copy .local into user's home
             POST_COMMANDS+=("cp -a /tmp/quickstartlinux/gnome/restore/.local ${ACTIVE_HOME}/ && chown -R ${ACTIVE_USER}:${ACTIVE_USER} ${ACTIVE_HOME}/.local")
-
-            # NOTE: Cleanup is intentionally moved to section 2d, so that
-            # the sudoers restore (2c) can reuse the same cloned repo.
         fi
     fi
 fi
@@ -526,7 +600,6 @@ RESTORE_SUDOERS=false
 if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     RESTORE_SUDOERS=true
 
-    # Reuse the detected user, or detect if not set yet
     if [[ -z "$ACTIVE_USER" || -z "$ACTIVE_UID" ]]; then
         detect_active_user
     fi
@@ -534,27 +607,14 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
     if [[ -z "$ACTIVE_USER" ]]; then
         echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
     else
-        # 1. Clone repo (if not already cloned by section 2b)
         POST_COMMANDS+=("if [[ ! -d /tmp/quickstartlinux ]]; then git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; fi")
-
-        # 2. Replace USER placeholder with the actual username in the repo's sudoers file
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' /tmp/quickstartlinux/gnome/restore/etc/sudoers; fi")
-
-        # 3. Append sudoers content from the repo to /etc/sudoers,
-        #    but only if it is not already present (avoid duplicates).
         POST_COMMANDS+=("if [[ -f /tmp/quickstartlinux/gnome/restore/etc/sudoers ]]; then if ! grep -qFf /tmp/quickstartlinux/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat /tmp/quickstartlinux/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
-
-        # 4. Validate sudoers syntax
         POST_COMMANDS+=("visudo -cf /etc/sudoers")
     fi
 fi
 
-# ============================================================
-# 2d. Cleanup quickstartlinux (once, if anything used it)
-# ============================================================
-if [[ "$INSTALL_GNOME" == "true" || "$USE_GNOME" == "true" || "$RESTORE_SUDOERS" == "true" ]]; then
-    POST_COMMANDS+=("rm -rf /tmp/quickstartlinux")
-fi
+# NOTE: cleanup of /tmp/quickstartlinux moved to the very end of the script.
 
 # ============================================================
 # 3. Install emoji & language fonts?
@@ -578,7 +638,7 @@ if ask_question "Set locale to ru_RU.UTF-8?" "Y"; then
 fi
 
 # ============================================================
-# 6. Speed up boot? (auto-detect bootloader: GRUB or systemd-boot)
+# 6. Speed up boot? (auto-detect bootloader)
 # ============================================================
 BOOTLOADER="$(detect_bootloader)"
 echo -e "${GREEN}Detected bootloader: ${YELLOW}${BOOTLOADER}${NC}"
@@ -601,45 +661,99 @@ case "$BOOTLOADER" in
 esac
 
 # ============================================================
+# 6b. GRUB theme (only for GRUB)
+# ============================================================
+if [[ "$BOOTLOADER" == "grub" ]]; then
+
+    # Check if a theme is already installed
+    if is_grub_theme_installed; then
+        local_installed=$(get_installed_grub_theme)
+        echo -e "${YELLOW}A GRUB theme appears to be already installed:${NC}"
+        if [[ -n "$local_installed" ]]; then
+            echo -e "  ${local_installed}"
+        else
+            echo -e "  (GRUB_THEME= is set, but directory not found)"
+        fi
+        if ask_question "Remove the installed GRUB theme?" "N"; then
+            GRUB_THEME_UNINSTALL=true
+        fi
+    fi
+
+    # Only offer install if we're not uninstalling
+    if [[ "$GRUB_THEME_UNINSTALL" != "true" ]]; then
+
+        # Ensure the repo is available so we can enumerate themes
+        if [[ ! -d "$GRUB_THEME_SRC" ]]; then
+            echo -e "${YELLOW}Cloning quickstartlinux to enumerate GRUB themes...${NC}"
+            rm -rf /tmp/quickstartlinux
+            if git clone https://github.com/NewTechDesign/quickstartlinux /tmp/quickstartlinux; then
+                :
+            else
+                echo -e "${RED}Clone failed — skipping GRUB theme step.${NC}"
+            fi
+        fi
+
+        if [[ -d "$GRUB_THEME_SRC" ]]; then
+            mapfile -t AVAILABLE_THEMES < <(list_grub_themes "$GRUB_THEME_SRC" || true)
+
+            if [[ ${#AVAILABLE_THEMES[@]} -eq 0 ]]; then
+                echo -e "${YELLOW}No themes found in ${GRUB_THEME_SRC} — skipping.${NC}"
+            else
+                if ask_question "Install a GRUB theme?" "N"; then
+                    INSTALL_GRUB_THEME=true
+
+                    echo
+                    echo -e "${YELLOW}Available themes:${NC}"
+                    for i in "${!AVAILABLE_THEMES[@]}"; do
+                        printf '  %d) %s\n' "$((i+1))" "${AVAILABLE_THEMES[$i]}"
+                    done
+                    echo "  0) skip"
+                    echo
+
+                    read -rp "$(echo -e "${YELLOW}Choose theme [1-${#AVAILABLE_THEMES[@]}, default 1]: ${NC}")" THEME_CHOICE
+                    THEME_CHOICE="${THEME_CHOICE:-1}"
+
+                    if [[ "$THEME_CHOICE" =~ ^[0-9]+$ ]] \
+                       && (( THEME_CHOICE >= 1 && THEME_CHOICE <= ${#AVAILABLE_THEMES[@]} )); then
+                        GRUB_THEME_SELECTED="${AVAILABLE_THEMES[$((THEME_CHOICE-1))]}"
+                        echo -e "${GREEN}Selected theme: ${GRUB_THEME_SELECTED}${NC}"
+
+                        echo
+                        echo -e "${YELLOW}Enter the title text for the GRUB menu:${NC}"
+                        echo -e "  (empty or spaces = default 'Bootloader')"
+                        read -rp "Title: " GRUB_THEME_TITLE
+                        if [[ -z "${GRUB_THEME_TITLE// /}" ]]; then
+                            GRUB_THEME_TITLE="Bootloader"
+                        fi
+                        echo -e "${GREEN}Title: ${GRUB_THEME_TITLE}${NC}"
+                    else
+                        echo -e "${YELLOW}Skipping theme install.${NC}"
+                        INSTALL_GRUB_THEME=false
+                    fi
+                fi
+            fi
+        fi
+    fi
+fi
+
+# ============================================================
 # 7. Install dev & utility tools?
 # ============================================================
 if ask_question "Install all development and utility tools?" "Y"; then
     PACMAN_PACKAGES+=(
-        # Base tools
         pacman-contrib
-
-        # Filesystems
         btrfs-progs xfsprogs f2fs-tools exfatprogs udftools ntfs-3g ntfsprogs
         dosfstools e2fsprogs cryptsetup
-
-        # Forensics / embedded
         binwalk squashfs-tools mtd-utils uboot-tools udisks2 usbutils
-
-        # GVFS / FUSE
         gvfs fuse2 fuse3
-
-        # Crypto / SSL
         openssl nss
-
-        # Android
         android-tools scrcpy
-
-        # Misc
         jhead pixman
-
-        # Java / Xorg
         jdk8-openjdk jre8-openjdk jre8-openjdk-headless jdk-openjdk xorg-xrandr
-
-        # Build tools
         git base-devel devtools fakeroot meson ninja pkgconfig glib2 libusb
         systemd-libs gdk-pixbuf2 cairo gcc
-
-        # Containers
         docker docker-compose
     )
-
-    # Enable docker
-    # POST_COMMANDS+=("systemctl enable --now docker")
 fi
 
 # ============================================================
@@ -649,12 +763,10 @@ INSTALL_FLATPAK=false
 if ask_question "Install useful applications via Flatpak?" "Y"; then
     INSTALL_FLATPAK=true
 
-    # Ensure flatpak is available
     if ! command_exists flatpak; then
         PACMAN_PACKAGES+=(flatpak)
     fi
 
-    # Add flathub remote
     POST_COMMANDS+=("flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo")
 
     FLATPAK_PACKAGES+=(
@@ -667,7 +779,6 @@ fi
 
 # ============================================================
 # 9. Install firmware (auto-detect CPU & GPU)?
-#    Only ask the question here; detection happens later.
 # ============================================================
 if ask_question "Install firmware for your CPU/GPU?" "Y"; then
     INSTALL_FIRMWARE=true
@@ -700,13 +811,12 @@ if ask_question "Do you want to install a virtual machine?" "N"; then
 fi
 
 # ============================================================
-# 11. DETECT CPU & GPU (after all questions)
+# 11. DETECT CPU & GPU
 # ============================================================
 if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     echo
     echo -e "${GREEN}>>> Detecting CPU and GPU...${NC}"
 
-    # Base audio/video/bluetooth firmware
     PACMAN_PACKAGES+=(
         pipewire pipewire-alsa pipewire-pulse wireplumber alsa-utils
         sof-firmware alsa-ucm-conf v4l-utils bluez bluez-utils pciutils
@@ -715,7 +825,6 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
     CPU_VENDOR=$(grep -m1 'vendor_id' /proc/cpuinfo | awk '{print $3}')
     GPU_INFO=$(lspci 2>/dev/null | grep -Ei 'vga|3d|display' || true)
 
-    # Intel CPU
     if [[ "$CPU_VENDOR" == "GenuineIntel" ]]; then
         echo -e "${GREEN}Intel CPU detected. Adding Intel packages...${NC}"
         PACMAN_PACKAGES+=(
@@ -724,7 +833,6 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
         )
     fi
 
-    # AMD CPU
     if [[ "$CPU_VENDOR" == "AuthenticAMD" ]]; then
         echo -e "${GREEN}AMD CPU detected. Adding AMD packages...${NC}"
         PACMAN_PACKAGES+=(
@@ -732,7 +840,6 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
         )
     fi
 
-    # NVIDIA GPU
     if echo "$GPU_INFO" | grep -qi nvidia; then
         echo -e "${GREEN}NVIDIA GPU detected. Adding NVIDIA packages...${NC}"
         PACMAN_PACKAGES+=(
@@ -741,7 +848,6 @@ if [[ "$INSTALL_FIRMWARE" == "true" ]]; then
         )
     fi
 
-    # AMD GPU
     if echo "$GPU_INFO" | grep -qiE 'amd|ati|radeon'; then
         echo -e "${GREEN}AMD GPU detected. Adding AMD GPU packages...${NC}"
         PACMAN_PACKAGES+=(
@@ -793,7 +899,13 @@ fi
 if [[ "$FIX_GRUB_MENU" == "true" ]]; then
     echo -e "${YELLOW}GRUB menu fix:${NC} enabled (Arch Linux / Windows)"
 fi
-if [[ "$TUNE_GRUB" == "true" || "$FIX_GRUB_MENU" == "true" ]]; then
+if [[ "$GRUB_THEME_UNINSTALL" == "true" ]]; then
+    echo -e "${YELLOW}GRUB theme:${NC} will be REMOVED"
+elif [[ "$INSTALL_GRUB_THEME" == "true" && -n "$GRUB_THEME_SELECTED" ]]; then
+    echo -e "${YELLOW}GRUB theme:${NC} ${GRUB_THEME_SELECTED}"
+    echo -e "  title: ${GRUB_THEME_TITLE}"
+fi
+if [[ "$TUNE_GRUB" == "true" || "$FIX_GRUB_MENU" == "true" || "$INSTALL_GRUB_THEME" == "true" || "$GRUB_THEME_UNINSTALL" == "true" ]]; then
     echo -e "${YELLOW}GRUB regeneration:${NC} single run after all GRUB changes"
 fi
 
@@ -811,7 +923,6 @@ fi
 if [[ ${#PACMAN_PACKAGES[@]} -gt 0 ]]; then
     echo
     echo -e "${GREEN}>>> Installing pacman packages...${NC}"
-    # Deduplicate
     UNIQUE_PACMAN=($(printf '%s\n' "${PACMAN_PACKAGES[@]}" | awk '!seen[$0]++'))
     pacman -S --noconfirm --needed "${UNIQUE_PACMAN[@]}"
 fi
@@ -844,6 +955,23 @@ if [[ "$FIX_GRUB_MENU" == "true" ]]; then
 fi
 
 # ============================================================
+# INSTALL / UNINSTALL GRUB THEME
+# ============================================================
+if [[ "$GRUB_THEME_UNINSTALL" == "true" ]]; then
+    if uninstall_grub_theme; then
+        GRUB_CHANGED=true
+    else
+        echo -e "${RED}Warning: GRUB theme uninstall failed.${NC}"
+    fi
+elif [[ "$INSTALL_GRUB_THEME" == "true" && -n "$GRUB_THEME_SELECTED" ]]; then
+    if install_grub_theme "${GRUB_THEME_SRC}/${GRUB_THEME_SELECTED}" "$GRUB_THEME_TITLE"; then
+        GRUB_CHANGED=true
+    else
+        echo -e "${RED}Warning: GRUB theme install failed.${NC}"
+    fi
+fi
+
+# ============================================================
 # REGENERATE GRUB CONFIG (exactly once)
 # ============================================================
 if [[ "$GRUB_CHANGED" == "true" ]]; then
@@ -869,6 +997,13 @@ if [[ ${#FLATPAK_PACKAGES[@]} -gt 0 ]]; then
     echo
     echo -e "${GREEN}>>> Installing Flatpak packages...${NC}"
     flatpak install --system -y flathub "${FLATPAK_PACKAGES[@]}"
+fi
+
+# ============================================================
+# CLEANUP
+# ============================================================
+if [[ -d /tmp/quickstartlinux ]]; then
+    rm -rf /tmp/quickstartlinux
 fi
 
 echo
