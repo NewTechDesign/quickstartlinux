@@ -631,9 +631,13 @@ if ask_question "Restore sudoers settings from quickstartlinux?" "Y"; then
         echo -e "${RED}Warning: Could not determine active user. Skipping sudoers restore.${NC}"
     else
         if ensure_quickstartlinux_cloned; then
-            POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${QUICKSTART_DIR}/gnome/restore/etc/sudoers; fi")
-            POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then if ! grep -qFf ${QUICKSTART_DIR}/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat ${QUICKSTART_DIR}/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
-            POST_COMMANDS+=("visudo -cf /etc/sudoers")
+            if find /etc/sudoers.d -maxdepth 1 -name "${ACTIVE_USER}" -print -quit 2>/dev/null | grep -q .; then
+                echo -e "${YELLOW}sudoers: found existing entry for '${ACTIVE_USER}' in /etc/sudoers.d/, skipping${NC}"
+            else
+                POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then sed -i 's/USER/${ACTIVE_USER}/g' ${QUICKSTART_DIR}/gnome/restore/etc/sudoers; fi")
+                POST_COMMANDS+=("if [[ -f ${QUICKSTART_DIR}/gnome/restore/etc/sudoers ]]; then if ! grep -qFf ${QUICKSTART_DIR}/gnome/restore/etc/sudoers /etc/sudoers; then printf '\n' >> /etc/sudoers && cat ${QUICKSTART_DIR}/gnome/restore/etc/sudoers >> /etc/sudoers; echo 'sudoers: added'; else echo 'sudoers: already present, skipping'; fi; fi")
+                POST_COMMANDS+=("visudo -cf /etc/sudoers")
+            fi
         else
             echo -e "${RED}Warning: quickstartlinux clone failed. Skipping sudoers restore.${NC}"
         fi
